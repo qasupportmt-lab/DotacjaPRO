@@ -1,0 +1,35 @@
+name: Generate initial Prisma migration
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  generate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.17.1
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: pnpm install --no-frozen-lockfile
+      - name: Generate initial SQL from Prisma schema
+        working-directory: packages/db
+        run: |
+          pnpm exec prisma migrate diff             --from-empty             --to-schema-datamodel prisma/schema.prisma             --script > initial.sql
+          test -s initial.sql
+          echo "MIGRATION_BEGIN"
+          base64 -w0 initial.sql
+          echo
+          echo "MIGRATION_END"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dotacjapro-initial-migration
+          path: packages/db/initial.sql
+          if-no-files-found: error
