@@ -301,4 +301,12 @@ const server = http.createServer(async (request, response) => {
 });
 
 const port = Number(process.env.PORT ?? 4100);
-server.listen(port, '0.0.0.0');
+server.listen(port, '0.0.0.0', () => {
+  void configureWebhook()
+    .then(() => {
+      console.log('Telegram webhook configured');
+    })
+    .catch((error) => {
+      console.error('Telegram webhook configuration failed', error);
+    });
+});
