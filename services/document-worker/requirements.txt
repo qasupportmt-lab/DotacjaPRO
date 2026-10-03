@@ -7,3 +7,4 @@ openpyxl==3.1.5
 boto3==1.40.44
 reportlab==4.4.4
 httpx==0.28.1
+pytest==8.4.2
