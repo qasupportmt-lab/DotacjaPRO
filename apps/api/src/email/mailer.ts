@@ -4,6 +4,52 @@ function senderAddress() {
   return process.env.EMAIL_FROM || process.env.SMTP_FROM;
 }
 
+function brevoSender() {
+  const email = process.env.BREVO_FROM_EMAIL?.trim();
+  if (!email) return null;
+
+  return {
+    email,
+    name: process.env.BREVO_FROM_NAME?.trim() || 'DotacjaPRO'
+  };
+}
+
+async function sendViaBrevo(input: {
+  to: string;
+  subject: string;
+  text: string;
+  html: string;
+}) {
+  const apiKey = process.env.BREVO_API_KEY;
+  const sender = brevoSender();
+  if (!apiKey || !sender) return false;
+
+  const response = await fetch('https://api.brevo.com/v3/smtp/email', {
+    method: 'POST',
+    headers: {
+      'api-key': apiKey,
+      accept: 'application/json',
+      'content-type': 'application/json'
+    },
+    body: JSON.stringify({
+      sender,
+      to: [{ email: input.to }],
+      replyTo: { email: sender.email, name: sender.name },
+      subject: input.subject,
+      textContent: input.text,
+      htmlContent: input.html
+    }),
+    signal: AbortSignal.timeout(20_000)
+  });
+
+  if (!response.ok) {
+    const detail = (await response.text()).slice(0, 2000);
+    throw new Error(`BREVO_SEND_FAILED:${response.status}:${detail}`);
+  }
+
+  return true;
+}
+
 async function sendViaResend(input: {
   to: string;
   subject: string;
@@ -66,6 +112,7 @@ function smtpConfig() {
 }
 
 export function emailProviderConfigured() {
+  const brevo = Boolean(process.env.BREVO_API_KEY && brevoSender());
   const resend = Boolean(process.env.RESEND_API_KEY && senderAddress());
   const smtp = Boolean(
     process.env.SMTP_HOST &&
@@ -73,13 +120,17 @@ export function emailProviderConfigured() {
     process.env.SMTP_PASS &&
     senderAddress()
   );
-  return resend || smtp;
+  return brevo || resend || smtp;
 }
 
 export async function sendEmailVerificationCode(email: string, code: string) {
   const subject = 'DotacjaPRO — kod weryfikacyjny';
   const text = `Twój kod weryfikacyjny DotacjaPRO: ${code}\n\nKod jest ważny przez 10 minut.`;
   const html = `<p>Twój kod weryfikacyjny DotacjaPRO:</p><p style="font-size:24px;font-weight:700;letter-spacing:4px">${code}</p><p>Kod jest ważny przez 10 minut.</p>`;
+
+  if (await sendViaBrevo({ to: email, subject, text, html })) {
+    return;
+  }
 
   if (await sendViaResend({
     to: email,
