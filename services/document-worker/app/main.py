@@ -12,7 +12,9 @@ from .renderers.dispatch import (
     UnsupportedOfficialFormFormat,
     render_official_document,
 )
-from .storage import get_bytes, put_bytes
+from .package_builder import build_package
+from .package_mailer import send_package_email
+from .storage import get_bytes, put_bytes, presigned_download_url
 
 API_BASE_URL = os.getenv("API_BASE_URL", "http://localhost:4000")
 WORKER_SECRET = os.getenv("INTERNAL_WORKER_SECRET", "")
@@ -176,6 +178,143 @@ async def work_once() -> dict:
 
 
 
+
+async def report_package_result(
+    client: httpx.AsyncClient,
+    job_id: str,
+    payload: dict,
+) -> None:
+    response = await client.post(
+        f"{API_BASE_URL}/v1/internal/package-jobs/{job_id}/result",
+        headers={**worker_headers(), "Content-Type": "application/json"},
+        json=payload,
+    )
+    response.raise_for_status()
+
+
+async def claim_package_job(client: httpx.AsyncClient) -> str | None:
+    response = await client.post(
+        f"{API_BASE_URL}/v1/internal/package-jobs/claim",
+        headers=worker_headers(),
+    )
+    response.raise_for_status()
+    job = response.json().get("job")
+    return job.get("id") if job else None
+
+
+async def process_package_job(
+    client: httpx.AsyncClient,
+    job_id: str,
+) -> dict:
+    response = await client.get(
+        f"{API_BASE_URL}/v1/internal/package-jobs/{job_id}/payload",
+        headers=worker_headers(),
+    )
+    response.raise_for_status()
+    payload = response.json()
+
+    package_bytes, package_sha256, package_name = build_package(payload)
+    storage_key = (
+        f"cases/{payload['job']['caseId']}/packages/"
+        f"{job_id}/{package_sha256}/{package_name}"
+    )
+
+    put_bytes(
+        storage_key,
+        package_bytes,
+        "application/zip",
+    )
+
+    max_attachment = int(
+        os.getenv("MAX_EMAIL_ATTACHMENT_BYTES", str(15 * 1024 * 1024))
+    )
+    link_expires = int(
+        os.getenv("PACKAGE_LINK_EXPIRES_SECONDS", str(24 * 60 * 60))
+    )
+
+    attachment: bytes | None
+    download_url: str | None
+
+    if len(package_bytes) <= max_attachment:
+        attachment = package_bytes
+        download_url = None
+    else:
+        attachment = None
+        download_url = presigned_download_url(
+            storage_key,
+            expires_seconds=link_expires,
+        )
+
+    send_package_email(
+        recipient=payload["job"]["recipientEmail"],
+        package_name=package_name,
+        package_bytes=attachment,
+        download_url=download_url,
+        funding_call_title=payload["fundingCall"]["title"],
+        institution_name=payload["fundingCall"]["institutionName"],
+        message_id=job_id,
+    )
+
+    await report_package_result(
+        client,
+        job_id,
+        {
+            "success": True,
+            "outputStorageKey": storage_key,
+            "outputSha256": package_sha256,
+            "outputName": package_name,
+        },
+    )
+
+    return {
+        "jobId": job_id,
+        "outputStorageKey": storage_key,
+        "outputSha256": package_sha256,
+        "deliveryMode": "attachment" if attachment is not None else "signed_url",
+    }
+
+
+async def package_once() -> dict:
+    async with httpx.AsyncClient(timeout=90.0) as client:
+        job_id = await claim_package_job(client)
+        if not job_id:
+            return {"processed": False, "jobId": None}
+
+        try:
+            result = await process_package_job(client, job_id)
+            return {"processed": True, "success": True, **result}
+        except Exception as exc:
+            message = str(exc)[:4000] or "PACKAGE_DELIVERY_FAILED"
+            error_code = (
+                "SMTP_NOT_CONFIGURED"
+                if "SMTP_NOT_CONFIGURED" in message
+                else "PACKAGE_DOCUMENT_HASH_MISMATCH"
+                if "PACKAGE_DOCUMENT_HASH_MISMATCH" in message
+                else "PACKAGE_DELIVERY_FAILED"
+            )
+
+            try:
+                await report_package_result(
+                    client,
+                    job_id,
+                    {
+                        "success": False,
+                        "errorCode": error_code,
+                        "errorMessage": message,
+                    },
+                )
+            except Exception:
+                pass
+
+            return {
+                "processed": True,
+                "success": False,
+                "jobId": job_id,
+                "errorCode": error_code,
+                "error": message,
+            }
+
+
 async def claim_analysis(client: httpx.AsyncClient) -> str | None:
     response = await client.post(
         f"{API_BASE_URL}/v1/internal/templates/claim-analysis",
@@ -253,12 +392,16 @@ async def analyze_once() -> dict:
 async def worker_loop() -> None:
     while not _stop_event.is_set():
         try:
-            render_result = await work_once()
-            if render_result.get("processed"):
+            package_result = await package_once()
+            if package_result.get("processed"):
                 delay = 0.25
             else:
-                analysis_result = await analyze_once()
-                delay = 0.25 if analysis_result.get("processed") else POLL_SECONDS
+                render_result = await work_once()
+                if render_result.get("processed"):
+                    delay = 0.25
+                else:
+                    analysis_result = await analyze_once()
+                    delay = 0.25 if analysis_result.get("processed") else POLL_SECONDS
         except Exception:
             delay = POLL_SECONDS
 
@@ -293,6 +436,7 @@ def health():
         "official_form_only": True,
         "supported_formats": ["PDF", "DOCX", "XLSX"],
         "legacy_formats_blocked": ["DOC", "XLS"],
+        "package_delivery": ["smtp_attachment", "signed_url_fallback"],
     }
 
 
@@ -310,3 +454,11 @@ async def run_analysis_once(
 ):
     verify_worker_secret(x_worker_secret)
     return await analyze_once()
+
+
+@app.post("/package-once")
+async def run_package_once(
+    x_worker_secret: str | None = Header(default=None),
+):
+    verify_worker_secret(x_worker_secret)
+    return await package_once()
