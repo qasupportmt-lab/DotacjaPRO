@@ -1010,6 +1010,7 @@ app.post('/v1/internal/source-document', async (request, reply) => {
 
 const templateMappingsSchema = z.object({
   mappingStatus: z.enum(['DRAFT', 'VERIFIED']),
+  analysis: z.unknown().optional(),
   mappings: z.array(z.object({
     fieldKey: z.string().min(1).max(240),
     sourcePath: z.string().max(1000).default(''),
@@ -1076,6 +1077,9 @@ app.put('/v1/internal/templates/:id/mappings', async (request, reply) => {
       data: {
         mappingStatus: parsed.data.mappingStatus,
         mappingVerifiedAt: parsed.data.mappingStatus === 'VERIFIED' ? new Date() : null,
+        mappingAnalyzedAt: parsed.data.mappingStatus === 'DRAFT' ? new Date() : undefined,
+        mappingAnalysisJson: parsed.data.analysis === undefined ? undefined : parsed.data.analysis as never,
+        mappingAnalysisError: null,
         mappingVersion: { increment: 1 }
       },
       include: {
@@ -1106,6 +1110,133 @@ app.put('/v1/internal/templates/:id/mappings', async (request, reply) => {
     mappingVersion: result.mappingVersion,
     fields: result.fieldMappings.length
   };
+});
+
+
+app.post('/v1/internal/templates/claim-analysis', async (request) => {
+  requireWorkerSecret(request);
+
+  for (let attempt = 0; attempt < 3; attempt++) {
+    const candidate = await prisma.officialFormTemplate.findFirst({
+      where: {
+        active: true,
+        officialOnly: true,
+        mappingStatus: 'UNMAPPED'
+      },
+      orderBy: { id: 'asc' },
+      select: { id: true }
+    });
+
+    if (!candidate) return { template: null };
+
+    const claimed = await prisma.officialFormTemplate.updateMany({
+      where: {
+        id: candidate.id,
+        mappingStatus: 'UNMAPPED'
+      },
+      data: {
+        mappingStatus: 'ANALYZING',
+        mappingAnalysisError: null
+      }
+    });
+
+    if (claimed.count === 1) {
+      return { template: { id: candidate.id } };
+    }
+  }
+
+  return { template: null };
+});
+
+app.get('/v1/internal/templates/:id/analysis-payload', async (request, reply) => {
+  requireWorkerSecret(request);
+  const id = (request.params as { id: string }).id;
+
+  const template = await prisma.officialFormTemplate.findUnique({
+    where: { id },
+    include: {
+      sourceDocument: {
+        include: {
+          source: {
+            select: {
+              canonicalUrl: true,
+              displayName: true
+            }
+          }
+        }
+      }
+    }
+  });
+
+  if (!template) return reply.code(404).send({ error: 'TEMPLATE_NOT_FOUND' });
+  if (template.mappingStatus !== 'ANALYZING') {
+    return reply.code(409).send({ error: 'TEMPLATE_NOT_ANALYZING' });
+  }
+
+  return {
+    template: {
+      id: template.id,
+      mappingVersion: template.mappingVersion
+    },
+    source: {
+      documentId: template.sourceDocument.id,
+      originalName: template.sourceDocument.originalName,
+      mimeType: template.sourceDocument.mimeType,
+      sha256: template.sourceDocument.sha256,
+      storageKey: template.sourceDocument.storageKey,
+      officialUrl: template.sourceDocument.source.canonicalUrl
+    }
+  };
+});
+
+const analysisFailureSchema = z.object({
+  error: z.string().min(1).max(4000)
+});
+
+app.post('/v1/internal/templates/:id/analysis-failed', async (request, reply) => {
+  requireWorkerSecret(request);
+  const id = (request.params as { id: string }).id;
+  const parsed = analysisFailureSchema.safeParse(request.body);
+  if (!parsed.success) {
+    return reply.code(400).send({ error: 'INVALID_ANALYSIS_FAILURE' });
+  }
+
+  const result = await prisma.officialFormTemplate.updateMany({
+    where: { id, mappingStatus: 'ANALYZING' },
+    data: {
+      mappingStatus: 'ANALYSIS_FAILED',
+      mappingAnalysisError: parsed.data.error,
+      mappingAnalyzedAt: new Date()
+    }
+  });
+
+  if (result.count !== 1) {
+    return reply.code(409).send({ error: 'TEMPLATE_NOT_ANALYZING' });
+  }
+
+  return { templateId: id, status: 'ANALYSIS_FAILED' };
+});
+
+app.post('/v1/internal/templates/:id/reset-analysis', async (request, reply) => {
+  requireWorkerSecret(request);
+  const id = (request.params as { id: string }).id;
+
+  const result = await prisma.officialFormTemplate.updateMany({
+    where: {
+      id,
+      mappingStatus: { in: ['ANALYSIS_FAILED', 'DRAFT'] }
+    },
+    data: {
+      mappingStatus: 'UNMAPPED',
+      mappingAnalysisError: null
+    }
+  });
+
+  if (result.count !== 1) {
+    return reply.code(409).send({ error: 'TEMPLATE_CANNOT_BE_RESET' });
+  }
+
+  return { templateId: id, status: 'UNMAPPED' };
 });
 
 app.post('/v1/internal/document-jobs/claim', async (request) => {
