@@ -338,55 +338,129 @@ const regionSchema = z.object({
   city: z.string().min(2).max(120),
   municipality: z.string().min(2).max(120).optional(),
   county: z.string().min(2).max(120).optional(),
-  postalCode: z.string().regex(/^\d{2}-\d{3}$/).optional()
+  postalCode: z.string().regex(/^\d{2}-\d{3}$/).optional(),
+  terytMunicipalityCode: z.string().min(4).max(7).optional(),
+  terytLocalityCode: z.string().min(1).max(12).optional()
 });
 
 app.put('/v1/me/region', async (request, reply) => {
   const userId = await requireUserId(request);
   const parsed = regionSchema.safeParse(request.body);
-  if (!parsed.success) return reply.code(400).send({ error: 'INVALID_REGION', details: parsed.error.flatten() });
+  if (!parsed.success) {
+    return reply.code(400).send({
+      error: 'INVALID_REGION',
+      details: parsed.error.flatten()
+    });
+  }
 
-  const region = parsed.data;
+  const requested = parsed.data;
   const now = new Date();
+
+  let region = {
+    voivodeship: requested.voivodeship,
+    city: requested.city,
+    municipality: requested.municipality,
+    county: requested.county,
+    postalCode: requested.postalCode
+  };
+
+  let terytMunicipalityCode: string | null = null;
+  let terytLocalityCode: string | null = null;
+  let terytVerified = false;
+  let terytVerifiedAt: Date | null = null;
+
+  if (requested.terytMunicipalityCode) {
+    const municipality = await prisma.terytMunicipality.findUnique({
+      where: { tercCode: requested.terytMunicipalityCode }
+    });
+
+    if (
+      !municipality ||
+      municipality.voivodeship !== requested.voivodeship ||
+      (municipality.validTo && municipality.validTo < now)
+    ) {
+      return reply.code(409).send({ error: 'TERYT_MUNICIPALITY_NOT_VERIFIED' });
+    }
+
+    let localityName = requested.city;
+
+    if (requested.terytLocalityCode) {
+      const locality = await prisma.terytLocality.findFirst({
+        where: {
+          simcCode: requested.terytLocalityCode,
+          municipalityTercCode: municipality.tercCode
+        }
+      });
+
+      if (!locality) {
+        return reply.code(409).send({ error: 'TERYT_LOCALITY_NOT_VERIFIED' });
+      }
+
+      localityName = locality.name;
+      terytLocalityCode = locality.simcCode;
+    }
+
+    region = {
+      voivodeship: municipality.voivodeship as typeof requested.voivodeship,
+      city: localityName,
+      municipality: municipality.municipality,
+      county: municipality.county ?? undefined,
+      postalCode: requested.postalCode
+    };
+
+    terytMunicipalityCode = municipality.tercCode;
+    terytVerified = true;
+    terytVerifiedAt = now;
+  }
 
   const assignments = await prisma.regionAssignment.findMany({
     where: {
       voivodeship: region.voivodeship,
       OR: [
-        { city: region.city },
-        ...(region.municipality ? [{ municipality: region.municipality }] : []),
-        ...(region.county ? [{ county: region.county }] : [])
+        ...(region.municipality
+          ? [{ municipality: { equals: region.municipality, mode: 'insensitive' as const } }]
+          : []),
+        { city: { equals: region.city, mode: 'insensitive' as const } },
+        ...(region.county
+          ? [{ county: { equals: region.county, mode: 'insensitive' as const } }]
+          : [])
       ],
       AND: [
         { OR: [{ validFrom: null }, { validFrom: { lte: now } }] },
         { OR: [{ validTo: null }, { validTo: { gte: now } }] }
       ]
     },
-    select: { institutionId: true, role: true, verifiedAt: true, sourceUrl: true }
+    select: {
+      institutionId: true,
+      role: true,
+      verifiedAt: true,
+      sourceUrl: true
+    }
   });
 
   const pup = assignments.find((a) => a.role === 'PUP');
   const wup = assignments.find((a) => a.role === 'WUP');
   const lgd = assignments.find((a) => a.role === 'LGD');
 
+  const profileData = {
+    ...region,
+    pupOfficeId: pup?.institutionId ?? null,
+    wupOfficeId: wup?.institutionId ?? null,
+    lgdId: lgd?.institutionId ?? null,
+    regionVerified: Boolean(pup || wup || lgd),
+    regionSource: pup?.sourceUrl ?? wup?.sourceUrl ?? lgd?.sourceUrl ?? null,
+    terytMunicipalityCode,
+    terytLocalityCode,
+    terytVerified,
+    terytVerifiedAt
+  };
+
   const profile = await prisma.userProfile.upsert({
     where: { userId },
-    update: {
-      ...region,
-      pupOfficeId: pup?.institutionId ?? null,
-      wupOfficeId: wup?.institutionId ?? null,
-      lgdId: lgd?.institutionId ?? null,
-      regionVerified: Boolean(pup || wup || lgd),
-      regionSource: pup?.sourceUrl ?? wup?.sourceUrl ?? lgd?.sourceUrl ?? null
-    },
+    update: profileData,
     create: {
       userId,
-      ...region,
-      pupOfficeId: pup?.institutionId ?? null,
-      wupOfficeId: wup?.institutionId ?? null,
-      lgdId: lgd?.institutionId ?? null,
-      regionVerified: Boolean(pup || wup || lgd),
-      regionSource: pup?.sourceUrl ?? wup?.sourceUrl ?? lgd?.sourceUrl ?? null
+      ...profileData
     }
   });
 
@@ -397,7 +471,12 @@ app.put('/v1/me/region', async (request, reply) => {
       action: 'REGION_PROFILE_UPDATED',
       entity: 'UserProfile',
       entityId: profile.id,
-      metadata: region
+      metadata: {
+        requested,
+        canonical: region,
+        terytVerified,
+        pupOfficeId: pup?.institutionId ?? null
+      }
     }
   });
 
@@ -407,7 +486,8 @@ app.put('/v1/me/region', async (request, reply) => {
       pupOfficeId: pup?.institutionId ?? null,
       wupOfficeId: wup?.institutionId ?? null,
       lgdId: lgd?.institutionId ?? null,
-      verified: profile.regionVerified
+      verified: profile.regionVerified,
+      terytVerified: profile.terytVerified
     }
   };
 });
