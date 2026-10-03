@@ -1,11 +1,28 @@
+import hashlib
 import os
 import re
 from urllib.parse import unquote, urlparse
 
 import boto3
+import httpx
 from botocore.exceptions import ClientError
 
 _BUCKET_READY = False
+
+
+def _mode() -> str:
+    return os.getenv("OBJECT_STORAGE_MODE", "api").lower()
+
+
+def _api_base_url() -> str:
+    return os.getenv("API_BASE_URL", "http://localhost:4000").rstrip("/")
+
+
+def _worker_secret() -> str:
+    value = os.getenv("INTERNAL_WORKER_SECRET")
+    if not value:
+        raise RuntimeError("INTERNAL_WORKER_SECRET is required")
+    return value
 
 
 def _client():
@@ -27,7 +44,7 @@ def _bucket() -> str:
 
 def ensure_bucket():
     global _BUCKET_READY
-    if _BUCKET_READY:
+    if _mode() != "s3" or _BUCKET_READY:
         return
 
     client = _client()
@@ -53,6 +70,23 @@ def safe_filename(name: str, url: str) -> str:
     return candidate[:180] or "document"
 
 
+def _put_api(key: str, content: bytes, mime_type: str) -> None:
+    digest = hashlib.sha256(content).hexdigest()
+    response = httpx.put(
+        f"{_api_base_url()}/v1/internal/storage/object",
+        headers={
+            "x-worker-secret": _worker_secret(),
+            "x-storage-key": key,
+            "x-object-content-type": mime_type,
+            "x-object-sha256": digest,
+            "content-type": "application/octet-stream",
+        },
+        content=content,
+        timeout=90.0,
+    )
+    response.raise_for_status()
+
+
 def put_official_document(
     source_id: str,
     sha256: str,
@@ -61,9 +95,14 @@ def put_official_document(
     content: bytes,
     mime_type: str,
 ) -> str:
-    ensure_bucket()
     filename = safe_filename(original_name, source_url)
     key = f"official/{source_id}/{sha256}/{filename}"
+
+    if _mode() == "api":
+        _put_api(key, content, mime_type)
+        return key
+
+    ensure_bucket()
     _client().put_object(
         Bucket=_bucket(),
         Key=key,
