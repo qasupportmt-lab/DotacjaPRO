@@ -485,6 +485,55 @@ def health():
     }
 
 
+@app.get("/ready")
+async def ready():
+    required = [
+        "API_BASE_URL",
+        "INTERNAL_WORKER_SECRET",
+        "SMTP_HOST",
+        "SMTP_USER",
+        "SMTP_PASS",
+        "SMTP_FROM",
+    ]
+    missing = [name for name in required if not os.getenv(name)]
+
+    mode = os.getenv("OBJECT_STORAGE_MODE", "api").lower()
+    if mode == "s3":
+        for name in ("S3_BUCKET", "S3_ACCESS_KEY", "S3_SECRET_KEY"):
+            if not os.getenv(name):
+                missing.append(name)
+
+    api_ready = False
+    api_status = None
+    api_error = None
+
+    if not missing:
+        try:
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                response = await client.get(
+                    f"{API_BASE_URL.rstrip('/')}/ready"
+                )
+                api_status = response.status_code
+                api_ready = response.status_code == 200
+        except Exception as exc:
+            api_error = str(exc)[:1000]
+
+    is_ready = not missing and api_ready
+    payload = {
+        "service": "document-worker",
+        "ready": is_ready,
+        "apiReady": api_ready,
+        "apiStatus": api_status,
+        "storageMode": mode,
+        "missingEnv": sorted(set(missing)),
+        "apiError": api_error,
+    }
+
+    if not is_ready:
+        raise HTTPException(status_code=503, detail=payload)
+    return payload
+
+
 @app.post("/work-once")
 async def run_once(
     x_worker_secret: str | None = Header(default=None),
