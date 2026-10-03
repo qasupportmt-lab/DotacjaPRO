@@ -37,3 +37,5 @@ button:disabled { opacity: .45; cursor: default; }
 .suggestion span { margin-top: 4px; color: var(--muted); font-size: 12px; font-weight: 500; }
 .verified { color: var(--accent); font-size: 13px; margin: 8px 0 14px; }
 .secondary { background: transparent; color: var(--text); border: 1px solid var(--line); }
+
+.qualification-status { display: inline-block; margin: 12px 0 4px; padding: 7px 10px; border: 1px solid var(--line); border-radius: 999px; color: var(--accent); font-size: 12px; font-weight: 850; letter-spacing: .04em; }
