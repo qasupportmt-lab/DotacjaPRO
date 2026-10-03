@@ -596,6 +596,29 @@ app.post('/v1/cases/:caseId/qualify', async (request, reply) => {
             { closesAt: { gte: new Date() } }
           ]
         },
+        include: {
+          criterionSets: {
+            where: {
+              status: 'VERIFIED',
+              verifiedAt: { not: null }
+            },
+            orderBy: { verifiedAt: 'desc' },
+            take: 1,
+            include: {
+              criteria: { orderBy: { sortOrder: 'asc' } },
+              sourceDocument: {
+                include: {
+                  source: {
+                    select: {
+                      canonicalUrl: true,
+                      displayName: true
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
         orderBy: [{ opensAt: 'asc' }, { closesAt: 'asc' }],
         take: 20
       })
@@ -633,7 +656,27 @@ app.post('/v1/cases/:caseId/qualify', async (request, reply) => {
         closesAt: call.closesAt,
         untilExhausted: call.untilExhausted,
         officialUrl: call.officialUrl,
-        verifiedAt: call.verifiedAt
+        verifiedAt: call.verifiedAt,
+        localCriteria: call.criterionSets[0] ? {
+          id: call.criterionSets[0].id,
+          title: call.criterionSets[0].title,
+          minimumPoints: call.criterionSets[0].minimumPoints,
+          maximumPoints: call.criterionSets[0].maximumPoints,
+          sourceHash: call.criterionSets[0].sourceHash,
+          officialSourceUrl: call.criterionSets[0].sourceDocument.source.canonicalUrl,
+          criteria: call.criterionSets[0].criteria.map((criterion) => ({
+            id: criterion.id,
+            code: criterion.code,
+            category: criterion.category,
+            title: criterion.title,
+            description: criterion.description,
+            maxPoints: criterion.maxPoints,
+            failIfZero: criterion.failIfZero,
+            scoring: criterion.scoringJson,
+            evidenceHint: criterion.evidenceHint,
+            sortOrder: criterion.sortOrder
+          }))
+        } : null
       }))
     }]
   };
@@ -667,6 +710,281 @@ app.post('/v1/cases/:caseId/qualify', async (request, reply) => {
     snapshotId: snapshot.id,
     ...result
   };
+});
+
+
+function jsonRecord(value: unknown): Record<string, unknown> | null {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+  return value as Record<string, unknown>;
+}
+
+function finiteNumber(value: unknown): number | null {
+  return typeof value === 'number' && Number.isFinite(value) ? value : null;
+}
+
+function autoScoreCriterion(
+  criterion: {
+    maxPoints: number | null;
+    scoringJson: unknown;
+  },
+  answer: unknown
+): { state: 'SCORED' | 'MANUAL_REVIEW' | 'MISSING'; points: number | null; reason: string } {
+  if (answer === undefined || answer === null || answer === '') {
+    return { state: 'MISSING', points: null, reason: 'Brak odpowiedzi.' };
+  }
+
+  const config = jsonRecord(criterion.scoringJson);
+  if (!config || config.mode !== 'AUTO' || typeof config.type !== 'string') {
+    return {
+      state: 'MANUAL_REVIEW',
+      points: null,
+      reason: 'Kryterium nie ma zweryfikowanej reguły automatycznej i wymaga oceny.'
+    };
+  }
+
+  let points: number | null = null;
+
+  if (config.type === 'BOOLEAN_POINTS' && typeof answer === 'boolean') {
+    points = answer
+      ? finiteNumber(config.truePoints)
+      : finiteNumber(config.falsePoints);
+  }
+
+  if (config.type === 'ENUM_POINTS' && typeof answer === 'string') {
+    const options = jsonRecord(config.options);
+    points = options ? finiteNumber(options[answer]) : null;
+  }
+
+  if (config.type === 'NUMBER_RANGES' && typeof answer === 'number' && Number.isFinite(answer)) {
+    const ranges = Array.isArray(config.ranges) ? config.ranges : [];
+    for (const rawRange of ranges) {
+      const range = jsonRecord(rawRange);
+      if (!range) continue;
+
+      const min = range.min === undefined || range.min === null
+        ? Number.NEGATIVE_INFINITY
+        : finiteNumber(range.min);
+      const max = range.max === undefined || range.max === null
+        ? Number.POSITIVE_INFINITY
+        : finiteNumber(range.max);
+      const candidatePoints = finiteNumber(range.points);
+
+      if (
+        min !== null &&
+        max !== null &&
+        candidatePoints !== null &&
+        answer >= min &&
+        answer <= max
+      ) {
+        points = candidatePoints;
+        break;
+      }
+    }
+  }
+
+  if (points === null) {
+    return {
+      state: 'MANUAL_REVIEW',
+      points: null,
+      reason: 'Odpowiedź nie pasuje do zweryfikowanej reguły automatycznego naliczania.'
+    };
+  }
+
+  const cap = criterion.maxPoints;
+  const safePoints = cap === null
+    ? Math.max(0, points)
+    : Math.max(0, Math.min(points, cap));
+
+  return {
+    state: 'SCORED',
+    points: safePoints,
+    reason: 'Punkty policzono wyłącznie według zweryfikowanej reguły kryterium.'
+  };
+}
+
+const criterionAssessmentSchema = z.object({
+  criterionSetId: z.string().min(1),
+  answers: z.record(z.string().min(1).max(120), z.unknown())
+});
+
+app.post('/v1/cases/:caseId/criterion-assessment', async (request, reply) => {
+  const userId = await requireUserId(request);
+  const caseId = (request.params as { caseId: string }).caseId;
+  const parsed = criterionAssessmentSchema.safeParse(request.body);
+
+  if (!parsed.success) {
+    return reply.code(400).send({
+      error: 'INVALID_CRITERION_ASSESSMENT',
+      details: parsed.error.flatten()
+    });
+  }
+
+  const item = await prisma.case.findFirst({
+    where: { id: caseId, userId },
+    include: {
+      user: { include: { profile: true } }
+    }
+  });
+  if (!item) return reply.code(404).send({ error: 'CASE_NOT_FOUND' });
+
+  const set = await prisma.localCriterionSet.findFirst({
+    where: {
+      id: parsed.data.criterionSetId,
+      status: 'VERIFIED',
+      verifiedAt: { not: null }
+    },
+    include: {
+      criteria: { orderBy: { sortOrder: 'asc' } },
+      sourceDocument: { include: { source: true } },
+      fundingCall: true
+    }
+  });
+
+  if (!set) {
+    return reply.code(404).send({ error: 'VERIFIED_CRITERION_SET_NOT_FOUND' });
+  }
+
+  const profile = item.user.profile;
+  if (profile?.pupOfficeId && profile.pupOfficeId !== set.institutionId) {
+    return reply.code(409).send({ error: 'CRITERION_SET_NOT_FOR_USER_PUP' });
+  }
+
+  if (item.fundingCallId && set.fundingCallId && item.fundingCallId !== set.fundingCallId) {
+    return reply.code(409).send({ error: 'CRITERION_SET_NOT_FOR_CASE_CALL' });
+  }
+
+  const rows = set.criteria.map((criterion) => {
+    const answer = parsed.data.answers[criterion.code];
+    const score = autoScoreCriterion(criterion, answer);
+
+    return {
+      criterionId: criterion.id,
+      code: criterion.code,
+      title: criterion.title,
+      maxPoints: criterion.maxPoints,
+      failIfZero: criterion.failIfZero,
+      answer: answer ?? null,
+      scoringState: score.state,
+      points: score.points,
+      reason: score.reason
+    };
+  });
+
+  const confirmedPoints = rows.reduce(
+    (sum, row) => sum + (row.points ?? 0),
+    0
+  );
+
+  const unresolvedMaxPoints = rows.reduce(
+    (sum, row) =>
+      row.scoringState === 'SCORED'
+        ? sum
+        : sum + (row.maxPoints ?? 0),
+    0
+  );
+
+  const triggeredBlockers = rows
+    .filter((row) => row.failIfZero && row.scoringState === 'SCORED' && row.points === 0)
+    .map((row) => ({ code: row.code, title: row.title }));
+
+  const unresolvedBlockers = rows
+    .filter((row) => row.failIfZero && row.scoringState !== 'SCORED')
+    .map((row) => ({ code: row.code, title: row.title }));
+
+  const minimumPoints = set.minimumPoints;
+  const maximumPossibleFromCurrentData = confirmedPoints + unresolvedMaxPoints;
+
+  let status:
+    | 'BLOCKING_RULE_TRIGGERED'
+    | 'BELOW_THRESHOLD_RANGE'
+    | 'NUMERIC_THRESHOLD_REACHED'
+    | 'PENDING_REVIEW'
+    | 'NO_VERIFIED_THRESHOLD';
+
+  if (triggeredBlockers.length > 0) {
+    status = 'BLOCKING_RULE_TRIGGERED';
+  } else if (minimumPoints === null) {
+    status = 'NO_VERIFIED_THRESHOLD';
+  } else if (maximumPossibleFromCurrentData < minimumPoints) {
+    status = 'BELOW_THRESHOLD_RANGE';
+  } else if (confirmedPoints >= minimumPoints && unresolvedBlockers.length === 0) {
+    status = 'NUMERIC_THRESHOLD_REACHED';
+  } else {
+    status = 'PENDING_REVIEW';
+  }
+
+  const result = {
+    criterionSet: {
+      id: set.id,
+      title: set.title,
+      version: set.version,
+      sourceHash: set.sourceHash,
+      officialSourceUrl: set.sourceDocument.source.canonicalUrl,
+      verifiedAt: set.verifiedAt
+    },
+    status,
+    confirmedPoints,
+    unresolvedMaxPoints,
+    possiblePointsRange: {
+      minimum: confirmedPoints,
+      maximum: maximumPossibleFromCurrentData
+    },
+    minimumPoints,
+    maximumPoints: set.maximumPoints,
+    triggeredBlockers,
+    unresolvedBlockers,
+    criteria: rows,
+    disclaimer: 'To jest techniczna samoocena według zweryfikowanych reguł punktowych. Kryteria uznaniowe pozostają do oceny urzędu i wynik nie oznacza przyznania dofinansowania.'
+  };
+
+  const snapshot = await prisma.criterionAssessmentSnapshot.create({
+    data: {
+      caseId,
+      criterionSetId: set.id,
+      status,
+      answersJson: parsed.data.answers as never,
+      resultJson: result as never
+    }
+  });
+
+  await prisma.auditEvent.create({
+    data: {
+      userId,
+      actorType: 'USER',
+      action: 'LOCAL_CRITERIA_ASSESSED',
+      entity: 'CriterionAssessmentSnapshot',
+      entityId: snapshot.id,
+      metadata: {
+        caseId,
+        criterionSetId: set.id,
+        status,
+        sourceHash: set.sourceHash
+      }
+    }
+  });
+
+  return {
+    snapshotId: snapshot.id,
+    ...result
+  };
+});
+
+app.get('/v1/cases/:caseId/criterion-assessment/latest', async (request, reply) => {
+  const userId = await requireUserId(request);
+  const caseId = (request.params as { caseId: string }).caseId;
+
+  const item = await prisma.case.findFirst({
+    where: { id: caseId, userId },
+    select: { id: true }
+  });
+  if (!item) return reply.code(404).send({ error: 'CASE_NOT_FOUND' });
+
+  const snapshot = await prisma.criterionAssessmentSnapshot.findFirst({
+    where: { caseId },
+    orderBy: { createdAt: 'desc' }
+  });
+
+  return { snapshot };
 });
 
 app.get('/v1/cases/:caseId/qualification/latest', async (request, reply) => {
