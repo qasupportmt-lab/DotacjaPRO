@@ -160,6 +160,12 @@ export default function Home() {
   const [token, setToken] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [authMode, setAuthMode] = useState<'login' | 'register'>('login');
+  const [authChannel, setAuthChannel] = useState<'web' | 'telegram' | null>(null);
+  const [webEmail, setWebEmail] = useState('');
+  const [webPassword, setWebPassword] = useState('');
+  const [webFirstName, setWebFirstName] = useState('');
+  const [telegramAvailable, setTelegramAvailable] = useState(false);
   const [region, setRegion] = useState({
     voivodeship: '',
     city: '',
@@ -230,6 +236,12 @@ export default function Home() {
     const webApp = window.Telegram?.WebApp;
     webApp?.ready();
     webApp?.expand();
+    setTelegramAvailable(Boolean(webApp?.initData));
+
+    const savedToken = window.localStorage.getItem('dotacjapro.session');
+    if (savedToken) {
+      void restoreSession(savedToken);
+    }
   }, []);
 
   useEffect(() => {
@@ -386,12 +398,93 @@ export default function Home() {
     }
   }
 
+  async function restoreSession(sessionToken: string) {
+    try {
+      const res = await fetch(`${API}/v1/auth/session`, {
+        headers: {
+          Authorization: `Bearer ${sessionToken}`,
+          'Content-Type': 'application/json'
+        }
+      });
+
+      if (!res.ok) {
+        window.localStorage.removeItem('dotacjapro.session');
+        return;
+      }
+
+      const data = await res.json();
+      setToken(sessionToken);
+      setIsAdmin(Boolean(data.user?.isAdmin));
+      setEmail(data.user?.email ?? '');
+      setAuthChannel(data.user?.authMethods?.telegram && window.Telegram?.WebApp?.initData
+        ? 'telegram'
+        : 'web');
+      setStep('region');
+    } catch {
+      window.localStorage.removeItem('dotacjapro.session');
+    }
+  }
+
+  async function authenticateWeb() {
+    setBusy(true);
+    setError(null);
+
+    try {
+      const endpoint = authMode === 'register'
+        ? '/v1/auth/web/register'
+        : '/v1/auth/web/login';
+
+      const body: Record<string, string> = {
+        email: webEmail.trim().toLowerCase(),
+        password: webPassword
+      };
+      if (authMode === 'register' && webFirstName.trim()) {
+        body.firstName = webFirstName.trim();
+      }
+
+      const res = await fetch(`${API}${endpoint}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body)
+      });
+
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        if (data.error === 'ACCOUNT_ALREADY_EXISTS') {
+          throw new Error('Konto z tym adresem już istnieje. Wybierz logowanie.');
+        }
+        if (data.error === 'ACCOUNT_REQUIRES_LINKING') {
+          throw new Error('Ten e-mail jest już przypisany do konta Telegram. Zaloguj się przez Telegram i ustaw hasło do logowania web.');
+        }
+        if (data.error === 'INVALID_CREDENTIALS') {
+          throw new Error('Nieprawidłowy e-mail lub hasło.');
+        }
+        throw new Error(
+          authMode === 'register'
+            ? 'Nie udało się utworzyć konta.'
+            : 'Nie udało się zalogować.'
+        );
+      }
+
+      window.localStorage.setItem('dotacjapro.session', data.token);
+      setToken(data.token);
+      setEmail(data.user?.email ?? webEmail.trim().toLowerCase());
+      setIsAdmin(Boolean(data.user?.isAdmin));
+      setAuthChannel('web');
+      setStep('region');
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Błąd logowania');
+    } finally {
+      setBusy(false);
+    }
+  }
+
   async function authenticate() {
     setBusy(true);
     setError(null);
     try {
       const initData = window.Telegram?.WebApp?.initData;
-      if (!initData) throw new Error('Otwórz aplikację z poziomu @DotacjaPRO_bot.');
+      if (!initData) throw new Error('Telegram nie jest dostępny w tej przeglądarce.');
 
       const res = await fetch(`${API}/v1/auth/telegram`, {
         method: 'POST',
@@ -401,8 +494,10 @@ export default function Home() {
       if (!res.ok) throw new Error('Nie udało się zalogować przez Telegram.');
 
       const data = await res.json();
+      window.localStorage.setItem('dotacjapro.session', data.token);
       setToken(data.token);
       setIsAdmin(Boolean(data.user?.isAdmin));
+      setAuthChannel('telegram');
       setStep('region');
 
       const requestWriteAccess = window.Telegram?.WebApp?.requestWriteAccess;
@@ -593,7 +688,7 @@ export default function Home() {
         body: JSON.stringify(body)
       });
       if (!res.ok) throw new Error('Nie udało się zapisać regionu.');
-      setStep('email');
+      setStep(authChannel === 'web' && email ? 'employment' : 'email');
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Błąd zapisu');
     } finally {
@@ -1216,9 +1311,89 @@ export default function Home() {
         </div>
 
         {step === 'welcome' && <>
-          <h2>Zaczynamy</h2>
-          <p>Logowanie odbywa się przez Telegram. Nie tworzysz dodatkowego hasła.</p>
-          <button onClick={authenticate} disabled={busy}>{busy ? 'Łączenie…' : 'Rozpocznij'}</button>
+          <h2>Zaloguj się do DotacjaPRO</h2>
+          <p>
+            Możesz korzystać z aplikacji bez Telegrama. Konto web działa w Safari,
+            Chrome i innych przeglądarkach, a Telegram możesz połączyć później.
+          </p>
+
+          <div className="auth-tabs">
+            <button
+              type="button"
+              className={authMode === 'login' ? '' : 'secondary'}
+              onClick={() => setAuthMode('login')}
+              disabled={busy}
+            >
+              Mam konto
+            </button>
+            <button
+              type="button"
+              className={authMode === 'register' ? '' : 'secondary'}
+              onClick={() => setAuthMode('register')}
+              disabled={busy}
+            >
+              Załóż konto
+            </button>
+          </div>
+
+          {authMode === 'register' && (
+            <label>
+              Imię <small>opcjonalnie</small>
+              <input
+                autoComplete="given-name"
+                value={webFirstName}
+                onChange={(e) => setWebFirstName(e.target.value)}
+                placeholder="Twoje imię"
+              />
+            </label>
+          )}
+
+          <label>
+            E-mail
+            <input
+              type="email"
+              autoComplete="email"
+              value={webEmail}
+              onChange={(e) => setWebEmail(e.target.value)}
+              placeholder="twoj@email.pl"
+            />
+          </label>
+
+          <label>
+            Hasło
+            <input
+              type="password"
+              autoComplete={authMode === 'register' ? 'new-password' : 'current-password'}
+              value={webPassword}
+              onChange={(e) => setWebPassword(e.target.value)}
+              placeholder="Minimum 10 znaków"
+            />
+          </label>
+
+          <button
+            onClick={authenticateWeb}
+            disabled={busy || !webEmail.includes('@') || webPassword.length < 10}
+          >
+            {busy
+              ? 'Łączenie…'
+              : authMode === 'register'
+                ? 'Załóż konto i przejdź dalej'
+                : 'Zaloguj się'}
+          </button>
+
+          {telegramAvailable && (
+            <>
+              <div className="auth-divider"><span>lub</span></div>
+              <button className="secondary" onClick={authenticate} disabled={busy}>
+                Kontynuuj przez Telegram
+              </button>
+            </>
+          )}
+
+          <p className="auth-note">
+            E-mail do wysyłki dokumentów potwierdzimy osobno przed generowaniem
+            i wysyłką finalnego pakietu.
+          </p>
         </>}
 
         {step === 'region' && <>
