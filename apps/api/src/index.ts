@@ -2020,6 +2020,7 @@ app.post('/v1/internal/source-document', async (request, reply) => {
 
 const templateMappingsSchema = z.object({
   mappingStatus: z.enum(['DRAFT', 'VERIFIED']),
+  requiredForPackage: z.boolean().optional(),
   analysis: z.unknown().optional(),
   mappings: z.array(z.object({
     fieldKey: z.string().min(1).max(240),
@@ -2086,6 +2087,7 @@ app.put('/v1/internal/templates/:id/mappings', async (request, reply) => {
       where: { id },
       data: {
         mappingStatus: parsed.data.mappingStatus,
+        requiredForPackage: parsed.data.requiredForPackage ?? true,
         mappingVerifiedAt: parsed.data.mappingStatus === 'VERIFIED' ? new Date() : null,
         mappingAnalyzedAt: parsed.data.mappingStatus === 'DRAFT' ? new Date() : undefined,
         mappingAnalysisJson: parsed.data.analysis === undefined ? undefined : parsed.data.analysis as never,
