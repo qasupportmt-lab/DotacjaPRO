@@ -128,6 +128,7 @@ model Source {
   scopeCounty      String?
   scopeMunicipality String?
   documents     SourceDocument[]
+  fundingCalls   FundingCall[]
 }
 
 model SourceDocument {
@@ -186,19 +187,27 @@ model FormFieldMapping {
 }
 
 model FundingCall {
-  id             String   @id @default(cuid())
-  institutionId  String
-  institution    Institution @relation(fields: [institutionId], references: [id])
-  title          String
-  programCode    String?
-  status         String
-  opensAt        DateTime?
-  closesAt       DateTime?
-  untilExhausted Boolean  @default(false)
-  officialUrl    String?
-  verifiedAt     DateTime?
-  cases          Case[]
+  id                 String   @id @default(cuid())
+  institutionId      String
+  institution        Institution @relation(fields: [institutionId], references: [id])
+  sourceId           String?  @unique
+  source             Source?  @relation(fields: [sourceId], references: [id], onDelete: SetNull)
+  title              String
+  programCode        String?
+  status             String
+  opensAt            DateTime?
+  closesAt           DateTime?
+  untilExhausted     Boolean  @default(false)
+  officialUrl        String?
+  verificationStatus String   @default("DISCOVERED")
+  evidenceJson       Json?
+  sourceHash         String?
+  discoveredAt       DateTime @default(now())
+  lastSeenAt         DateTime @default(now())
+  verifiedAt         DateTime?
+  cases              Case[]
   @@index([status, opensAt, closesAt])
+  @@index([verificationStatus, verifiedAt])
 }
 
 model Case {
