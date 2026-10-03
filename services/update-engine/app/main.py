@@ -1,14 +1,21 @@
 import os
+from datetime import datetime
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
-from fastapi import FastAPI, Header, HTTPException
+from fastapi import FastAPI, Header, HTTPException, Request
 from zoneinfo import ZoneInfo
 
-from .scanner import scan_all_sources, build_morning_digests, requalify_verified_changes, advance_funding_call_statuses
+from .scanner import (
+    advance_funding_call_statuses,
+    build_morning_digests,
+    requalify_verified_changes,
+    scan_all_sources,
+)
 from .teryt import sync_teryt_from_urls
 
+WARSAW = ZoneInfo("Europe/Warsaw")
 app = FastAPI(title="DotacjaPRO Update Engine")
-scheduler = AsyncIOScheduler(timezone=ZoneInfo("Europe/Warsaw"))
+scheduler = AsyncIOScheduler(timezone=WARSAW)
 
 
 def require_secret(x_worker_secret: str | None):
@@ -17,8 +24,43 @@ def require_secret(x_worker_secret: str | None):
         raise HTTPException(status_code=401, detail="Unauthorized")
 
 
+def require_cron(request: Request):
+    configured = os.getenv("CRON_SECRET")
+    received = request.headers.get("authorization")
+    if not configured or received != f"Bearer {configured}":
+        raise HTTPException(status_code=401, detail="Unauthorized cron")
+
+
+async def run_local_schedule_tick(now: datetime | None = None) -> dict:
+    local_now = (now or datetime.now(WARSAW)).astimezone(WARSAW)
+    hour = local_now.hour
+    minute = local_now.minute
+
+    results: dict[str, object] = {
+        "localTime": local_now.isoformat(),
+        "advanceCalls": await advance_funding_call_statuses(),
+    }
+
+    if hour == 4 and minute < 45:
+        results["teryt"] = await sync_teryt_from_urls()
+
+    if (hour, minute // 30) in {(5, 0), (18, 0)}:
+        results["sourceScan"] = await scan_all_sources()
+
+    if (hour, minute // 30) in {(5, 1), (18, 1)}:
+        results["requalification"] = await requalify_verified_changes()
+
+    if hour == 7 and minute < 30:
+        results["morningDigest"] = await build_morning_digests()
+
+    return results
+
+
 @app.on_event("startup")
 async def startup():
+    if os.getenv("ENABLE_BACKGROUND_SCHEDULER", "false").lower() != "true":
+        return
+
     scheduler.add_job(
         advance_funding_call_statuses,
         "cron",
@@ -26,7 +68,7 @@ async def startup():
         id="funding-call-status-clock",
         replace_existing=True,
         max_instances=1,
-        coalesce=True
+        coalesce=True,
     )
     scheduler.add_job(
         sync_teryt_from_urls,
@@ -36,7 +78,7 @@ async def startup():
         id="daily-teryt-sync",
         replace_existing=True,
         max_instances=1,
-        coalesce=True
+        coalesce=True,
     )
     scheduler.add_job(
         scan_all_sources,
@@ -46,7 +88,7 @@ async def startup():
         id="morning-source-scan",
         replace_existing=True,
         max_instances=1,
-        coalesce=True
+        coalesce=True,
     )
     scheduler.add_job(
         requalify_verified_changes,
@@ -56,7 +98,7 @@ async def startup():
         id="morning-requalification",
         replace_existing=True,
         max_instances=1,
-        coalesce=True
+        coalesce=True,
     )
     scheduler.add_job(
         build_morning_digests,
@@ -66,7 +108,7 @@ async def startup():
         id="morning-digest-builder",
         replace_existing=True,
         max_instances=1,
-        coalesce=True
+        coalesce=True,
     )
     scheduler.add_job(
         scan_all_sources,
@@ -76,7 +118,7 @@ async def startup():
         id="evening-source-scan",
         replace_existing=True,
         max_instances=1,
-        coalesce=True
+        coalesce=True,
     )
     scheduler.add_job(
         requalify_verified_changes,
@@ -86,7 +128,7 @@ async def startup():
         id="evening-requalification",
         replace_existing=True,
         max_instances=1,
-        coalesce=True
+        coalesce=True,
     )
     scheduler.start()
 
@@ -103,15 +145,32 @@ def health():
         "service": "update-engine",
         "status": "ok",
         "timezone": "Europe/Warsaw",
+        "backgroundScheduler": os.getenv(
+            "ENABLE_BACKGROUND_SCHEDULER",
+            "false",
+        ).lower() == "true",
+        "cronTick": "every 30 minutes; local Warsaw dispatcher",
         "scan_schedule": [
             "04:30 TERYT",
             "05:00 sources",
             "05:30 requalification",
+            "07:00 digest",
             "18:00 sources",
-            "18:30 requalification"
+            "18:30 requalification",
         ],
-        "digest_policy": "morning-if-relevant"
     }
+
+
+@app.get("/cron/tick")
+async def cron_tick(request: Request):
+    require_cron(request)
+    return await run_local_schedule_tick()
+
+
+@app.post("/tick-now")
+async def tick_now(x_worker_secret: str | None = Header(default=None)):
+    require_secret(x_worker_secret)
+    return await run_local_schedule_tick()
 
 
 @app.post("/scan-now")
