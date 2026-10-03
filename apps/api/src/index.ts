@@ -1211,6 +1211,83 @@ function valueIsPresent(value: unknown) {
 }
 
 
+
+app.get('/v1/cases/:caseId/official-forms', async (request, reply) => {
+  const userId = await requireUserId(request);
+  const caseId = (request.params as { caseId: string }).caseId;
+
+  const item = await prisma.case.findFirst({
+    where: { id: caseId, userId },
+    select: {
+      id: true,
+      fundingCallId: true,
+      fundingCall: {
+        select: {
+          id: true,
+          title: true,
+          status: true,
+          verificationStatus: true,
+          verifiedAt: true,
+          closesAt: true
+        }
+      }
+    }
+  });
+
+  if (!item) return reply.code(404).send({ error: 'CASE_NOT_FOUND' });
+  if (!item.fundingCallId || !item.fundingCall) {
+    return reply.code(409).send({ error: 'FUNDING_CALL_SELECTION_REQUIRED' });
+  }
+
+  if (
+    item.fundingCall.verificationStatus !== 'VERIFIED' ||
+    !item.fundingCall.verifiedAt
+  ) {
+    return reply.code(409).send({ error: 'VERIFIED_FUNDING_CALL_REQUIRED' });
+  }
+
+  const templates = await prisma.officialFormTemplate.findMany({
+    where: {
+      fundingCallId: item.fundingCallId,
+      active: true,
+      officialOnly: true,
+      mappingStatus: 'VERIFIED',
+      mappingVerifiedAt: { not: null }
+    },
+    include: {
+      sourceDocument: {
+        include: {
+          source: {
+            select: {
+              canonicalUrl: true,
+              displayName: true
+            }
+          }
+        }
+      }
+    },
+    orderBy: [
+      { formCode: 'asc' },
+      { mappingVersion: 'desc' }
+    ]
+  });
+
+  return {
+    fundingCall: item.fundingCall,
+    forms: templates.map((template) => ({
+      id: template.id,
+      formCode: template.formCode,
+      versionLabel: template.versionLabel,
+      mappingVersion: template.mappingVersion,
+      originalName: template.sourceDocument.originalName,
+      mimeType: template.sourceDocument.mimeType,
+      sha256: template.sourceDocument.sha256,
+      officialSourceUrl: template.sourceDocument.source.canonicalUrl,
+      officialSourceName: template.sourceDocument.source.displayName
+    }))
+  };
+});
+
 app.get('/v1/cases/:caseId/form-questions', async (request, reply) => {
   const userId = await requireUserId(request);
   const caseId = (request.params as { caseId: string }).caseId;
@@ -1328,6 +1405,61 @@ app.put('/v1/cases/:caseId/answers', async (request, reply) => {
   });
 
   return { saved: saved.length };
+});
+
+
+app.get('/v1/cases/:caseId/render-jobs/:jobId', async (request, reply) => {
+  const userId = await requireUserId(request);
+  const { caseId, jobId } = request.params as { caseId: string; jobId: string };
+
+  const job = await prisma.documentRenderJob.findFirst({
+    where: {
+      id: jobId,
+      caseId,
+      case: { userId }
+    },
+    select: {
+      id: true,
+      status: true,
+      outputName: true,
+      outputMimeType: true,
+      errorCode: true,
+      requestedAt: true,
+      startedAt: true,
+      completedAt: true,
+      template: {
+        select: {
+          id: true,
+          formCode: true,
+          versionLabel: true,
+          sourceDocument: {
+            select: {
+              originalName: true,
+              sha256: true
+            }
+          }
+        }
+      }
+    }
+  });
+
+  if (!job) {
+    return reply.code(404).send({ error: 'DOCUMENT_JOB_NOT_FOUND' });
+  }
+
+  return {
+    job: {
+      id: job.id,
+      status: job.status,
+      outputName: job.outputName,
+      outputMimeType: job.outputMimeType,
+      errorCode: job.errorCode,
+      requestedAt: job.requestedAt,
+      startedAt: job.startedAt,
+      completedAt: job.completedAt,
+      template: job.template
+    }
+  };
 });
 
 const renderRequestSchema = z.object({
