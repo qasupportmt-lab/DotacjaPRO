@@ -358,3 +358,13 @@ async def requalify_verified_changes() -> dict:
         )
         response.raise_for_status()
         return response.json()
+
+
+async def advance_funding_call_statuses() -> dict:
+    async with httpx.AsyncClient(timeout=30.0) as client:
+        response = await client.post(
+            f"{API_BASE_URL}/v1/internal/funding-calls/advance-statuses",
+            headers=worker_headers(),
+        )
+        response.raise_for_status()
+        return response.json()
