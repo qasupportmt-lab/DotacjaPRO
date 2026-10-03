@@ -1,8 +1,7 @@
 name: Generate initial Prisma migration
 
 on:
-  push:
-    branches: [main]
+  workflow_dispatch:
 
 permissions:
   contents: read
