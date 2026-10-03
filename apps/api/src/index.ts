@@ -7,9 +7,7 @@ import {
   assessLocalCriteria,
   buildLocalCriterionQuestions,
   qualifyPupStartup,
-  LOCAL_CRITERIA_ENGINE_VERSION,
-  QUALIFICATION_ENGINE_VERSION,
-  type LocalCriterionAnswer
+  QUALIFICATION_ENGINE_VERSION
 } from '@dotacjapro/rules';
 import { validateTelegramInitData } from './security/telegram.js';
 import { createSessionToken, verifySessionToken } from './security/session.js';
@@ -719,178 +717,6 @@ app.post('/v1/cases/:caseId/qualify', async (request, reply) => {
 });
 
 
-const criterionAssessmentSchema = z.object({
-  criterionSetId: z.string().min(1),
-  answers: z.record(z.string().min(1).max(120), z.unknown())
-});
-
-app.post('/v1/cases/:caseId/criterion-assessment', async (request, reply) => {
-  const userId = await requireUserId(request);
-  const caseId = (request.params as { caseId: string }).caseId;
-  const parsed = criterionAssessmentSchema.safeParse(request.body);
-
-  if (!parsed.success) {
-    return reply.code(400).send({
-      error: 'INVALID_CRITERION_ASSESSMENT',
-      details: parsed.error.flatten()
-    });
-  }
-
-  const item = await prisma.case.findFirst({
-    where: { id: caseId, userId },
-    include: {
-      user: { include: { profile: true } }
-    }
-  });
-  if (!item) return reply.code(404).send({ error: 'CASE_NOT_FOUND' });
-
-  const set = await prisma.localCriterionSet.findFirst({
-    where: {
-      id: parsed.data.criterionSetId,
-      status: 'VERIFIED',
-      verifiedAt: { not: null }
-    },
-    include: {
-      criteria: { orderBy: { sortOrder: 'asc' } },
-      sourceDocument: { include: { source: true } },
-      fundingCall: true
-    }
-  });
-
-  if (!set) {
-    return reply.code(404).send({ error: 'VERIFIED_CRITERION_SET_NOT_FOUND' });
-  }
-
-  const profile = item.user.profile;
-  if (profile?.pupOfficeId && profile.pupOfficeId !== set.institutionId) {
-    return reply.code(409).send({ error: 'CRITERION_SET_NOT_FOR_USER_PUP' });
-  }
-
-  if (item.fundingCallId && set.fundingCallId && item.fundingCallId !== set.fundingCallId) {
-    return reply.code(409).send({ error: 'CRITERION_SET_NOT_FOR_CASE_CALL' });
-  }
-
-  const normalizedAnswers: Record<string, LocalCriterionAnswer> = {};
-  for (const [key, value] of Object.entries(parsed.data.answers)) {
-    if (
-      value === null ||
-      value === undefined ||
-      typeof value === 'string' ||
-      typeof value === 'number' ||
-      typeof value === 'boolean'
-    ) {
-      normalizedAnswers[key] = value;
-    }
-  }
-
-  const assessment = assessLocalCriteria(
-    {
-      id: set.id,
-      version: set.version,
-      sourceHash: set.sourceHash,
-      minimumPoints: set.minimumPoints,
-      maximumPoints: set.maximumPoints,
-      criteria: set.criteria.map((criterion) => ({
-        code: criterion.code,
-        title: criterion.title,
-        description: criterion.description,
-        maxPoints: criterion.maxPoints,
-        failIfZero: criterion.failIfZero,
-        scoringJson: criterion.scoringJson,
-        evidenceHint: criterion.evidenceHint
-      }))
-    },
-    normalizedAnswers
-  );
-
-  const triggeredBlockers = assessment.results
-    .filter((row) => row.blockingFailure)
-    .map((row) => ({ code: row.code, title: row.title }));
-
-  const unresolvedBlockers = assessment.results
-    .filter((row) => row.blockingUnknown)
-    .map((row) => ({ code: row.code, title: row.title }));
-
-  const result = {
-    criterionSet: {
-      id: set.id,
-      title: set.title,
-      version: set.version,
-      sourceHash: set.sourceHash,
-      officialSourceUrl: set.sourceDocument.source.canonicalUrl,
-      verifiedAt: set.verifiedAt
-    },
-    engineVersion: LOCAL_CRITERIA_ENGINE_VERSION,
-    status: assessment.status,
-    confirmedPoints: assessment.knownPoints,
-    unresolvedMaxPoints: Math.max(
-      0,
-      assessment.possiblePoints - assessment.knownPoints
-    ),
-    possiblePointsRange: {
-      minimum: assessment.knownPoints,
-      maximum: assessment.possiblePoints
-    },
-    minimumPoints: assessment.minimumPoints,
-    maximumPoints: assessment.publishedMaximumPoints,
-    thresholdMet: assessment.thresholdMet,
-    triggeredBlockers,
-    unresolvedBlockers,
-    criteria: assessment.results,
-    summary: assessment.summary,
-    disclaimer: 'To jest techniczna samoocena według zweryfikowanych reguł punktowych. Kryteria uznaniowe pozostają do oceny urzędu i wynik nie oznacza przyznania dofinansowania.'
-  };
-
-  const snapshot = await prisma.criterionAssessmentSnapshot.create({
-    data: {
-      caseId,
-      criterionSetId: set.id,
-      status,
-      answersJson: normalizedAnswers as never,
-      resultJson: result as never
-    }
-  });
-
-  await prisma.auditEvent.create({
-    data: {
-      userId,
-      actorType: 'USER',
-      action: 'LOCAL_CRITERIA_ASSESSED',
-      entity: 'CriterionAssessmentSnapshot',
-      entityId: snapshot.id,
-      metadata: {
-        caseId,
-        criterionSetId: set.id,
-        status,
-        sourceHash: set.sourceHash
-      }
-    }
-  });
-
-  return {
-    snapshotId: snapshot.id,
-    ...result
-  };
-});
-
-app.get('/v1/cases/:caseId/criterion-assessment/latest', async (request, reply) => {
-  const userId = await requireUserId(request);
-  const caseId = (request.params as { caseId: string }).caseId;
-
-  const item = await prisma.case.findFirst({
-    where: { id: caseId, userId },
-    select: { id: true }
-  });
-  if (!item) return reply.code(404).send({ error: 'CASE_NOT_FOUND' });
-
-  const snapshot = await prisma.criterionAssessmentSnapshot.findFirst({
-    where: { caseId },
-    orderBy: { createdAt: 'desc' }
-  });
-
-  return { snapshot };
-});
-
 app.get('/v1/cases/:caseId/qualification/latest', async (request, reply) => {
   const userId = await requireUserId(request);
   const caseId = (request.params as { caseId: string }).caseId;
@@ -1138,7 +964,7 @@ app.post('/v1/cases/:caseId/local-criteria/assess', async (request, reply) => {
   await prisma.auditEvent.create({
     data: {
       userId,
-      actorType: 'SYSTEM',
+      actorType: 'USER',
       action: 'LOCAL_CRITERIA_ASSESSED',
       entity: 'CriterionAssessmentSnapshot',
       entityId: snapshot.id,
