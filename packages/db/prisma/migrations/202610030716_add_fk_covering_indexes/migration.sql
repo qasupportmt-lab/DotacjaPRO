@@ -1,0 +1,9 @@
+CREATE INDEX "Source_institutionId_idx" ON "Source"("institutionId");
+CREATE INDEX "OfficialFormTemplate_sourceDocumentId_idx" ON "OfficialFormTemplate"("sourceDocumentId");
+CREATE INDEX "FundingCall_institutionId_idx" ON "FundingCall"("institutionId");
+CREATE INDEX "Case_fundingCallId_idx" ON "Case"("fundingCallId");
+CREATE INDEX "CaseDocument_caseId_idx" ON "CaseDocument"("caseId");
+CREATE INDEX "AuditEvent_userId_idx" ON "AuditEvent"("userId");
+CREATE INDEX "DocumentRenderJob_templateId_idx" ON "DocumentRenderJob"("templateId");
+CREATE INDEX "TerytLocality_municipalityTercCode_idx" ON "TerytLocality"("municipalityTercCode");
+CREATE INDEX "DocumentPackageJob_submissionInstructionId_idx" ON "DocumentPackageJob"("submissionInstructionId");
