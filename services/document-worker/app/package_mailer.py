@@ -12,6 +12,10 @@ def _sender() -> str | None:
 
 
 def email_provider_configured() -> bool:
+    brevo = bool(
+        os.getenv("BREVO_API_KEY")
+        and os.getenv("BREVO_FROM_EMAIL")
+    )
     resend = bool(os.getenv("RESEND_API_KEY") and _sender())
     smtp = bool(
         os.getenv("SMTP_HOST")
@@ -19,7 +23,7 @@ def email_provider_configured() -> bool:
         and os.getenv("SMTP_PASS")
         and _sender()
     )
-    return resend or smtp
+    return brevo or resend or smtp
 
 
 def _smtp_config() -> dict | None:
@@ -41,6 +45,59 @@ def _smtp_config() -> dict | None:
         "port": port,
         "secure": secure,
     }
+
+
+def _send_brevo(
+    recipient: str,
+    subject: str,
+    text: str,
+    package_name: str,
+    package_bytes: bytes | None,
+) -> bool:
+    api_key = os.getenv("BREVO_API_KEY")
+    sender_email = os.getenv("BREVO_FROM_EMAIL")
+    sender_name = os.getenv("BREVO_FROM_NAME", "DotacjaPRO")
+
+    if not api_key or not sender_email:
+        return False
+
+    payload: dict = {
+        "sender": {
+            "email": sender_email,
+            "name": sender_name,
+        },
+        "to": [{"email": recipient}],
+        "replyTo": {
+            "email": sender_email,
+            "name": sender_name,
+        },
+        "subject": subject,
+        "textContent": text,
+    }
+
+    if package_bytes is not None:
+        payload["attachment"] = [{
+            "name": package_name,
+            "content": base64.b64encode(package_bytes).decode("ascii"),
+        }]
+
+    response = httpx.post(
+        "https://api.brevo.com/v3/smtp/email",
+        headers={
+            "api-key": api_key,
+            "accept": "application/json",
+            "content-type": "application/json",
+        },
+        json=payload,
+        timeout=45.0,
+    )
+
+    if response.status_code >= 400:
+        raise RuntimeError(
+            f"BREVO_SEND_FAILED:{response.status_code}:{response.text[:2000]}"
+        )
+
+    return True
 
 
 def _send_resend(
@@ -128,6 +185,15 @@ def send_package_email(
         "DotacjaPRO nie gwarantuje przyznania dofinansowania; decyzję podejmuje właściwa instytucja.",
     ])
     body = "\n".join(text)
+
+    if _send_brevo(
+        recipient,
+        subject,
+        body,
+        package_name,
+        package_bytes,
+    ):
+        return
 
     if _send_resend(
         recipient,
