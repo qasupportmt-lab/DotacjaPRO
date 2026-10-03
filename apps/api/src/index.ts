@@ -107,6 +107,92 @@ app.get('/v1/regions/search', async (request, reply) => {
   };
 });
 
+
+const locationSearchSchema = z.object({
+  voivodeship: z.enum(VOIVODESHIPS),
+  q: z.string().trim().min(2).max(120)
+});
+
+app.get('/v1/locations/search', async (request, reply) => {
+  const parsed = locationSearchSchema.safeParse(request.query);
+  if (!parsed.success) {
+    return reply.code(400).send({ error: 'INVALID_LOCATION_SEARCH' });
+  }
+
+  const localities = await prisma.terytLocality.findMany({
+    where: {
+      name: { contains: parsed.data.q, mode: 'insensitive' },
+      municipality: {
+        voivodeship: parsed.data.voivodeship,
+        OR: [
+          { validTo: null },
+          { validTo: { gte: new Date() } }
+        ]
+      }
+    },
+    include: {
+      municipality: true
+    },
+    orderBy: [{ name: 'asc' }],
+    take: 30
+  });
+
+  const items = [];
+  for (const locality of localities) {
+    const municipality = locality.municipality;
+
+    const routing = await prisma.regionAssignment.findFirst({
+      where: {
+        role: 'PUP',
+        voivodeship: municipality.voivodeship,
+        municipality: {
+          equals: municipality.municipality,
+          mode: 'insensitive'
+        },
+        OR: [
+          { validTo: null },
+          { validTo: { gte: new Date() } }
+        ]
+      },
+      include: {
+        institution: {
+          select: {
+            id: true,
+            name: true,
+            officialUrl: true
+          }
+        }
+      },
+      orderBy: { verifiedAt: 'desc' }
+    });
+
+    items.push({
+      locality: {
+        simcCode: locality.simcCode,
+        name: locality.name,
+        type: locality.localityType
+      },
+      municipality: {
+        tercCode: municipality.tercCode,
+        name: municipality.municipality,
+        type: municipality.municipalityType,
+        county: municipality.county,
+        voivodeship: municipality.voivodeship
+      },
+      terytVerified: true,
+      pup: routing ? {
+        id: routing.institution.id,
+        name: routing.institution.name,
+        officialUrl: routing.institution.officialUrl,
+        verifiedAt: routing.verifiedAt,
+        sourceUrl: routing.sourceUrl
+      } : null
+    });
+  }
+
+  return { items };
+});
+
 const authSchema = z.object({
   initData: z.string().min(10)
 });
@@ -1636,6 +1722,115 @@ app.post('/v1/internal/document-jobs/:id/result', async (request, reply) => {
   return {
     job: result.completed,
     document: result.document
+  };
+});
+
+
+const terytImportSchema = z.object({
+  sourceVersion: z.string().max(120).optional(),
+  municipalities: z.array(z.object({
+    tercCode: z.string().min(4).max(7),
+    voivodeshipCode: z.string().length(2),
+    voivodeship: z.string().min(2).max(120),
+    countyCode: z.string().max(2).optional(),
+    county: z.string().max(120).optional(),
+    municipalityCode: z.string().max(2).optional(),
+    municipality: z.string().min(1).max(120),
+    municipalityTypeCode: z.string().max(2).optional(),
+    municipalityType: z.string().max(120).optional(),
+    validFrom: z.string().date().optional(),
+    validTo: z.string().date().optional()
+  })).max(5000),
+  localities: z.array(z.object({
+    simcCode: z.string().min(1).max(12),
+    name: z.string().min(1).max(160),
+    localityType: z.string().max(120).optional(),
+    municipalityTercCode: z.string().min(4).max(7)
+  })).max(10000)
+});
+
+app.post('/v1/internal/teryt/import', async (request, reply) => {
+  requireWorkerSecret(request);
+  const parsed = terytImportSchema.safeParse(request.body);
+  if (!parsed.success) {
+    return reply.code(400).send({
+      error: 'INVALID_TERYT_IMPORT',
+      details: parsed.error.flatten()
+    });
+  }
+
+  const now = new Date();
+  let municipalitiesUpserted = 0;
+  let localitiesUpserted = 0;
+
+  for (const item of parsed.data.municipalities) {
+    await prisma.terytMunicipality.upsert({
+      where: { tercCode: item.tercCode },
+      update: {
+        voivodeshipCode: item.voivodeshipCode,
+        voivodeship: item.voivodeship,
+        countyCode: item.countyCode ?? null,
+        county: item.county ?? null,
+        municipalityCode: item.municipalityCode ?? null,
+        municipality: item.municipality,
+        municipalityTypeCode: item.municipalityTypeCode ?? null,
+        municipalityType: item.municipalityType ?? null,
+        validFrom: item.validFrom ? new Date(item.validFrom) : null,
+        validTo: item.validTo ? new Date(item.validTo) : null,
+        sourceUpdatedAt: now,
+        sourceVersion: parsed.data.sourceVersion ?? null
+      },
+      create: {
+        tercCode: item.tercCode,
+        voivodeshipCode: item.voivodeshipCode,
+        voivodeship: item.voivodeship,
+        countyCode: item.countyCode ?? null,
+        county: item.county ?? null,
+        municipalityCode: item.municipalityCode ?? null,
+        municipality: item.municipality,
+        municipalityTypeCode: item.municipalityTypeCode ?? null,
+        municipalityType: item.municipalityType ?? null,
+        validFrom: item.validFrom ? new Date(item.validFrom) : null,
+        validTo: item.validTo ? new Date(item.validTo) : null,
+        sourceUpdatedAt: now,
+        sourceVersion: parsed.data.sourceVersion ?? null
+      }
+    });
+    municipalitiesUpserted++;
+  }
+
+  for (const item of parsed.data.localities) {
+    const municipalityExists = await prisma.terytMunicipality.findUnique({
+      where: { tercCode: item.municipalityTercCode },
+      select: { tercCode: true }
+    });
+    if (!municipalityExists) continue;
+
+    await prisma.terytLocality.upsert({
+      where: { simcCode: item.simcCode },
+      update: {
+        name: item.name,
+        localityType: item.localityType ?? null,
+        municipalityTercCode: item.municipalityTercCode,
+        sourceUpdatedAt: now,
+        sourceVersion: parsed.data.sourceVersion ?? null
+      },
+      create: {
+        simcCode: item.simcCode,
+        name: item.name,
+        localityType: item.localityType ?? null,
+        municipalityTercCode: item.municipalityTercCode,
+        sourceUpdatedAt: now,
+        sourceVersion: parsed.data.sourceVersion ?? null
+      }
+    });
+    localitiesUpserted++;
+  }
+
+  return {
+    municipalitiesUpserted,
+    localitiesUpserted,
+    sourceVersion: parsed.data.sourceVersion ?? null
   };
 });
 
