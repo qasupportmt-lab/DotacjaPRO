@@ -7,7 +7,9 @@ import {
   assessLocalCriteria,
   buildLocalCriterionQuestions,
   qualifyPupStartup,
-  QUALIFICATION_ENGINE_VERSION
+  LOCAL_CRITERIA_ENGINE_VERSION,
+  QUALIFICATION_ENGINE_VERSION,
+  type LocalCriterionAnswer
 } from '@dotacjapro/rules';
 import { validateTelegramInitData } from './security/telegram.js';
 import { createSessionToken, verifySessionToken } from './security/session.js';
