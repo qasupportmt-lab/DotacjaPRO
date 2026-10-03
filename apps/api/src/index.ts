@@ -91,17 +91,17 @@ async function adminProxyToInternal(
     return reply.code(503).send({ error: 'INTERNAL_WORKER_SECRET_NOT_CONFIGURED' });
   }
 
-  const response = await app.inject({
+  const response: any = await (app.inject as any)({
     method,
     url,
     headers: {
       'content-type': 'application/json',
       'x-worker-secret': secret
     },
-    payload
+    payload: payload as any
   });
 
-  const contentType = response.headers['content-type'] ?? '';
+  const contentType = String(response.headers?.['content-type'] ?? '');
   const body = contentType.includes('application/json')
     ? response.json()
     : { raw: response.body };
@@ -158,12 +158,6 @@ app.get('/v1/admin/review-queue', async (request) => {
     prisma.localCriterionSet.findMany({
       where: { status: 'DRAFT' },
       include: {
-        institution: {
-          select: {
-            name: true,
-            officialUrl: true
-          }
-        },
         fundingCall: {
           select: {
             id: true,
@@ -218,7 +212,13 @@ app.get('/v1/admin/review-queue', async (request) => {
             sha256: true,
             source: {
               select: {
-                canonicalUrl: true
+                canonicalUrl: true,
+                institution: {
+                  select: {
+                    name: true,
+                    officialUrl: true
+                  }
+                }
               }
             }
           }
