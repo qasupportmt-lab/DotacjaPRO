@@ -1839,7 +1839,13 @@ app.get('/v1/internal/sources', async (request) => {
       checkedAt: true,
       scopeVoivodeship: true,
       scopeCounty: true,
-      scopeMunicipality: true
+      scopeMunicipality: true,
+      institution: {
+        select: {
+          name: true,
+          officialUrl: true
+        }
+      }
     }
   });
   return { sources };
