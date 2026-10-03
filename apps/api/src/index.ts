@@ -2142,6 +2142,90 @@ app.post('/v1/internal/funding-calls/:id/verify', async (request, reply) => {
   return { call: updated };
 });
 
+
+app.post('/v1/internal/funding-calls/advance-statuses', async (request) => {
+  requireWorkerSecret(request);
+  const now = new Date();
+
+  const candidates = await prisma.fundingCall.findMany({
+    where: {
+      verificationStatus: 'VERIFIED',
+      verifiedAt: { not: null },
+      OR: [
+        {
+          status: 'ANNOUNCED',
+          opensAt: { lte: now }
+        },
+        {
+          status: { in: ['ANNOUNCED', 'OPEN'] },
+          closesAt: { lt: now }
+        }
+      ]
+    },
+    include: { source: true },
+    orderBy: [{ opensAt: 'asc' }, { closesAt: 'asc' }],
+    take: 500
+  });
+
+  let opened = 0;
+  let closed = 0;
+
+  for (const call of candidates) {
+    let nextStatus: 'OPEN' | 'CLOSED' | null = null;
+
+    if (call.closesAt && call.closesAt < now) {
+      nextStatus = 'CLOSED';
+    } else if (
+      call.status === 'ANNOUNCED' &&
+      call.opensAt &&
+      call.opensAt <= now
+    ) {
+      nextStatus = 'OPEN';
+    }
+
+    if (!nextStatus || nextStatus === call.status) continue;
+
+    const updated = await prisma.fundingCall.update({
+      where: { id: call.id },
+      data: {
+        status: nextStatus,
+        lastSeenAt: now
+      }
+    });
+
+    if (nextStatus === 'OPEN') opened++;
+    if (nextStatus === 'CLOSED') closed++;
+
+    await prisma.changeEvent.create({
+      data: {
+        sourceId: call.sourceId,
+        changeType: 'FUNDING_CALL_STATUS_TRANSITION',
+        severity: nextStatus === 'OPEN' ? 'YELLOW' : 'INFORMATION',
+        summary: `Nabór ${updated.title}: status ${call.status} → ${nextStatus}`,
+        verified: true,
+        verifiedAt: now,
+        verificationScore: 100,
+        payload: {
+          fundingCallId: updated.id,
+          previousStatus: call.status,
+          status: nextStatus,
+          opensAt: updated.opensAt,
+          closesAt: updated.closesAt,
+          scopeVoivodeship: call.source?.scopeVoivodeship ?? null,
+          scopeCounty: call.source?.scopeCounty ?? null,
+          scopeMunicipality: call.source?.scopeMunicipality ?? null
+        }
+      }
+    });
+  }
+
+  return {
+    checked: candidates.length,
+    opened,
+    closed
+  };
+});
+
 const verifyChangeSchema = z.object({
   verified: z.boolean(),
   verificationScore: z.number().int().min(0).max(100).optional()
