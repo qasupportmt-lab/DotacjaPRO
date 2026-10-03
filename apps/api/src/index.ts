@@ -2523,6 +2523,7 @@ app.get('/v1/internal/package-jobs/:id/payload', async (request, reply) => {
       renderJobId: render.id,
       storageKey: render.outputStorageKey!,
       outputName: render.outputName ?? render.template.sourceDocument.originalName,
+      outputSha256: render.outputSha256,
       mimeType: render.outputMimeType ?? render.template.sourceDocument.mimeType,
       sourceSha256: render.template.sourceDocument.sha256,
       formCode: render.template.formCode
