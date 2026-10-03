@@ -161,6 +161,43 @@ def health():
     }
 
 
+@app.get("/ready")
+async def ready():
+    missing = [
+        name for name in ("API_BASE_URL", "INTERNAL_WORKER_SECRET")
+        if not os.getenv(name)
+    ]
+
+    api_ready = False
+    api_status = None
+    api_error = None
+
+    if not missing:
+        try:
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                response = await client.get(
+                    f"{os.getenv('API_BASE_URL', '').rstrip('/')}/ready"
+                )
+                api_status = response.status_code
+                api_ready = response.status_code == 200
+        except Exception as exc:
+            api_error = str(exc)[:1000]
+
+    is_ready = not missing and api_ready
+    payload = {
+        "service": "update-engine",
+        "ready": is_ready,
+        "apiReady": api_ready,
+        "apiStatus": api_status,
+        "missingEnv": missing,
+        "apiError": api_error,
+    }
+
+    if not is_ready:
+        raise HTTPException(status_code=503, detail=payload)
+    return payload
+
+
 @app.get("/cron/tick")
 async def cron_tick(request: Request):
     require_cron(request)
