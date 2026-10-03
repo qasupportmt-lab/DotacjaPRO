@@ -17,8 +17,8 @@ const institutions = [
     type: 'PUP',
     name: 'Powiatowy Urząd Pracy w Katowicach',
     officialUrl: 'https://katowice.praca.gov.pl/',
-    source: 'https://katowice.praca.gov.pl/rynek-pracy/aktualnosci/-/asset_publisher/8VCc6CLiHUaO/content/nabor-wnioskow-o-dofinansowanie-przyznanie-bezrobotnemu-srodkow-na-podjecie-dzialalnosci-gospodarczej-1?p_r_p_assetEntryId=58924503',
-    kind: 'PUP_CALL_PAGE',
+    source: 'https://katowice.praca.gov.pl/',
+    kind: 'PUP_HOME',
     scopeVoivodeship: 'śląskie'
   },
   {
