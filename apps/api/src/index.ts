@@ -555,6 +555,138 @@ app.post('/v1/cases', async (request, reply) => {
 });
 
 
+
+const selectFundingCallSchema = z.object({
+  fundingCallId: z.string().min(1)
+});
+
+app.post('/v1/cases/:caseId/select-call', async (request, reply) => {
+  const userId = await requireUserId(request);
+  const caseId = (request.params as { caseId: string }).caseId;
+  const parsed = selectFundingCallSchema.safeParse(request.body);
+
+  if (!parsed.success) {
+    return reply.code(400).send({ error: 'INVALID_FUNDING_CALL_SELECTION' });
+  }
+
+  const item = await prisma.case.findFirst({
+    where: { id: caseId, userId },
+    include: {
+      user: {
+        include: { profile: true }
+      },
+      documents: { select: { id: true }, take: 1 },
+      renderJobs: {
+        where: { status: { in: ['QUEUED', 'PROCESSING', 'COMPLETED'] } },
+        select: { id: true },
+        take: 1
+      }
+    }
+  });
+
+  if (!item) {
+    return reply.code(404).send({ error: 'CASE_NOT_FOUND' });
+  }
+
+  if (item.submittedAt || item.documents.length > 0 || item.renderJobs.length > 0) {
+    return reply.code(409).send({ error: 'CASE_CALL_LOCKED_BY_DOCUMENTS' });
+  }
+
+  const pupOfficeId = item.user.profile?.pupOfficeId;
+  if (!pupOfficeId) {
+    return reply.code(409).send({ error: 'VERIFIED_PUP_ROUTING_REQUIRED' });
+  }
+
+  const now = new Date();
+  const call = await prisma.fundingCall.findFirst({
+    where: {
+      id: parsed.data.fundingCallId,
+      institutionId: pupOfficeId,
+      verificationStatus: 'VERIFIED',
+      verifiedAt: { not: null },
+      status: { in: ['ANNOUNCED', 'OPEN'] },
+      OR: [
+        { closesAt: null },
+        { closesAt: { gte: now } }
+      ]
+    },
+    include: {
+      criterionSets: {
+        where: {
+          status: 'VERIFIED',
+          verifiedAt: { not: null }
+        },
+        orderBy: { verifiedAt: 'desc' },
+        take: 1,
+        select: {
+          id: true,
+          title: true,
+          minimumPoints: true,
+          maximumPoints: true,
+          sourceHash: true
+        }
+      },
+      formTemplates: {
+        where: {
+          active: true,
+          officialOnly: true,
+          mappingStatus: 'VERIFIED'
+        },
+        orderBy: { mappingVerifiedAt: 'desc' },
+        select: {
+          id: true,
+          formCode: true,
+          versionLabel: true,
+          mappingVersion: true
+        }
+      }
+    }
+  });
+
+  if (!call) {
+    return reply.code(409).send({ error: 'FUNDING_CALL_NOT_AVAILABLE_FOR_CASE' });
+  }
+
+  const updated = await prisma.case.update({
+    where: { id: caseId },
+    data: {
+      fundingCallId: call.id,
+      caseType: 'PUP_STARTUP',
+      status: 'CALL_SELECTED'
+    }
+  });
+
+  await prisma.auditEvent.create({
+    data: {
+      userId,
+      actorType: 'USER',
+      action: 'FUNDING_CALL_SELECTED',
+      entity: 'Case',
+      entityId: caseId,
+      metadata: {
+        fundingCallId: call.id,
+        institutionId: call.institutionId,
+        verifiedAt: call.verifiedAt,
+        sourceHash: call.sourceHash
+      }
+    }
+  });
+
+  return {
+    case: updated,
+    fundingCall: {
+      id: call.id,
+      title: call.title,
+      status: call.status,
+      opensAt: call.opensAt,
+      closesAt: call.closesAt,
+      officialUrl: call.officialUrl,
+      criterionSet: call.criterionSets[0] ?? null,
+      formTemplates: call.formTemplates
+    }
+  };
+});
+
 app.post('/v1/cases/:caseId/qualify', async (request, reply) => {
   const userId = await requireUserId(request);
   const caseId = (request.params as { caseId: string }).caseId;
@@ -826,6 +958,10 @@ async function getVerifiedCriterionSetForCase(
   }
 
   if (set.fundingCall) {
+    if (!item.fundingCallId || item.fundingCallId !== set.fundingCall.id) {
+      return { error: 'FUNDING_CALL_SELECTION_REQUIRED_OR_MISMATCH' as const };
+    }
+
     if (
       set.fundingCall.verificationStatus !== 'VERIFIED' ||
       !set.fundingCall.verifiedAt ||
@@ -1083,7 +1219,8 @@ app.get('/v1/cases/:caseId/form-questions', async (request, reply) => {
 
   const [item, template] = await Promise.all([
     prisma.case.findFirst({
-      where: { id: caseId, userId }
+      where: { id: caseId, userId },
+      select: { id: true, fundingCallId: true }
     }),
     prisma.officialFormTemplate.findFirst({
       where: {
@@ -1103,6 +1240,13 @@ app.get('/v1/cases/:caseId/form-questions', async (request, reply) => {
 
   if (!item) return reply.code(404).send({ error: 'CASE_NOT_FOUND' });
   if (!template) return reply.code(404).send({ error: 'VERIFIED_TEMPLATE_NOT_FOUND' });
+
+  if (template.fundingCallId && template.fundingCallId !== item.fundingCallId) {
+    return reply.code(409).send({ error: 'FORM_TEMPLATE_FUNDING_CALL_MISMATCH' });
+  }
+  if (item.fundingCallId && !template.fundingCallId) {
+    return reply.code(409).send({ error: 'CALL_SPECIFIC_FORM_REQUIRED' });
+  }
 
   const values = await buildResolvedCaseValues(caseId, userId);
 
@@ -1197,7 +1341,12 @@ app.post('/v1/cases/:caseId/render', async (request, reply) => {
   if (!parsed.success) return reply.code(400).send({ error: 'INVALID_RENDER_REQUEST' });
 
   const item = await prisma.case.findFirst({
-    where: { id: caseId, userId }
+    where: { id: caseId, userId },
+    select: {
+      id: true,
+      status: true,
+      fundingCallId: true
+    }
   });
   if (!item) return reply.code(404).send({ error: 'CASE_NOT_FOUND' });
 
@@ -1223,6 +1372,13 @@ app.post('/v1/cases/:caseId/render', async (request, reply) => {
   });
   if (!template) {
     return reply.code(409).send({ error: 'VERIFIED_OFFICIAL_TEMPLATE_REQUIRED' });
+  }
+
+  if (template.fundingCallId && template.fundingCallId !== item.fundingCallId) {
+    return reply.code(409).send({ error: 'FORM_TEMPLATE_FUNDING_CALL_MISMATCH' });
+  }
+  if (item.fundingCallId && !template.fundingCallId) {
+    return reply.code(409).send({ error: 'CALL_SPECIFIC_FORM_REQUIRED' });
   }
 
   const values = await buildResolvedCaseValues(caseId, userId);
@@ -1623,6 +1779,22 @@ app.post('/v1/internal/source-document', async (request, reply) => {
   const source = await prisma.source.findUnique({ where: { id: parsed.data.sourceId } });
   if (!source) return reply.code(404).send({ error: 'SOURCE_NOT_FOUND' });
 
+  let discoveredFundingCallId: string | null = null;
+  if (source.discoveredFromUrl) {
+    const parentSource = await prisma.source.findUnique({
+      where: { canonicalUrl: source.discoveredFromUrl },
+      select: { id: true }
+    });
+
+    if (parentSource) {
+      const call = await prisma.fundingCall.findUnique({
+        where: { sourceId: parentSource.id },
+        select: { id: true }
+      });
+      discoveredFundingCallId = call?.id ?? null;
+    }
+  }
+
   const existing = await prisma.sourceDocument.findUnique({
     where: {
       sourceId_sha256: {
@@ -1668,6 +1840,7 @@ app.post('/v1/internal/source-document', async (request, reply) => {
         institutionId: source.institutionId,
         formCode: `source:${source.id}`,
         versionLabel: parsed.data.sha256.slice(0, 12),
+        fundingCallId: discoveredFundingCallId,
         active: true,
         officialOnly: true
       }
