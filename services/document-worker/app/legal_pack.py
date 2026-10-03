@@ -41,6 +41,8 @@ Użytkownik odpowiada za prawdziwość, kompletność i aktualność przekazanyc
 3. LICENCJA
 Nabycie materiału nie przenosi autorskich praw majątkowych. Użytkownik otrzymuje niewyłączną, niezbywalną licencję do korzystania z autorskich materiałów DotacjaPRO na własne potrzeby albo wewnętrzne potrzeby swojej organizacji, w zakresie niezbędnym do korzystania z zakupionego produktu i prowadzenia własnej sprawy.
 
+Licencja dotyczy wyłącznie elementów, do których Sprzedawcy lub jego licencjodawcom przysługują prawa. Nie obejmuje urzędowych dokumentów, materiałów, znaków lub innych elementów, które z mocy prawa nie stanowią przedmiotu prawa autorskiego albo należą do osób trzecich.
+
 Bez odrębnej pisemnej zgody zabronione jest w szczególności:
 - odsprzedawanie, sublicencjonowanie lub odpłatne udostępnianie materiałów;
 - publiczne rozpowszechnianie całości lub istotnych części materiałów;
@@ -52,7 +54,9 @@ Bez odrębnej pisemnej zgody zabronione jest w szczególności:
 Powyższe ograniczenia nie naruszają bezwzględnie obowiązujących przepisów, w tym dozwolonego użytku i prawa cytatu, jeżeli mają zastosowanie.
 
 4. NIEDOZWOLONE SPOSOBY UŻYCIA
-Materiałów nie wolno wykorzystywać do działań bezprawnych, wprowadzania innych osób lub organów w błąd, podszywania się pod instytucje, składania nieprawdziwych oświadczeń, naruszania praw osób trzecich ani działań celowo nakierowanych na wyrządzenie szkody DotacjaPRO, Sprzedawcy lub osobom trzecim.
+Materiałów nie wolno wykorzystywać do działań bezprawnych, wprowadzania innych osób lub organów w błąd, podszywania się pod instytucje, składania nieprawdziwych oświadczeń, naruszania praw osób trzecich ani bezprawnych działań celowo nakierowanych na wyrządzenie szkody DotacjaPRO, Sprzedawcy lub osobom trzecim.
+
+Postanowienie to nie ogranicza prawa użytkownika do składania reklamacji, zawiadomień, skarg, dochodzenia roszczeń, zgłaszania naruszeń ani wyrażania zgodnych z prawem opinii i krytyki.
 
 5. ODPOWIEDZIALNOŚĆ
 W granicach dopuszczalnych przez prawo Sprzedawca nie odpowiada za skutki:
