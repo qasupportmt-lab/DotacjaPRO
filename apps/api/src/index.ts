@@ -2518,7 +2518,10 @@ app.get('/v1/internal/package-jobs/:id/payload', async (request, reply) => {
   }
 
   const requiredDocuments = job.case.renderJobs
-    .filter((render) => render.template.requiredForPackage)
+    .filter((render) =>
+      render.template.requiredForPackage &&
+      render.template.fundingCallId === job.case.fundingCallId
+    )
     .map((render) => ({
       renderJobId: render.id,
       storageKey: render.outputStorageKey!,
