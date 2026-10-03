@@ -256,6 +256,8 @@ model ChangeEvent {
   summary       String
   verified      Boolean @default(false)
   verificationScore Int?
+  verifiedAt    DateTime?
+  requalificationProcessedAt DateTime?
   payload       Json?
   @@index([severity, verified, detectedAt])
 }
