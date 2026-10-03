@@ -1,0 +1,15 @@
+export type CaseStatus =
+  | 'NEW'
+  | 'QUALIFICATION'
+  | 'PROGRAM_MATCHED'
+  | 'APPLICATION_PREPARATION'
+  | 'MISSING_DOCUMENTS'
+  | 'READY_TO_SUBMIT'
+  | 'SUBMITTED'
+  | 'APPROVED'
+  | 'REJECTED'
+  | 'EXECUTION'
+  | 'SETTLEMENT'
+  | 'CLOSED';
+
+export type SourceTrustLevel = 'OFFICIAL_PRIMARY' | 'OFFICIAL_SECONDARY' | 'UNVERIFIED';
