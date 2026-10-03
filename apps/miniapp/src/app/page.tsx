@@ -23,6 +23,54 @@ const VOIVODESHIPS = [
 
 type Step = 'welcome' | 'region' | 'email' | 'employment' | 'business' | 'done';
 
+type LocalCriterion = {
+  code: string;
+  title: string;
+  description: string | null;
+  maxPoints: number | null;
+  failIfZero: boolean;
+  scoring: unknown;
+  evidenceHint: string | null;
+};
+
+type LocalCriteriaSet = {
+  id: string;
+  title: string;
+  minimumPoints: number | null;
+  maximumPoints: number | null;
+  sourceHash: string;
+  officialSourceUrl: string;
+  criteria: LocalCriterion[];
+};
+
+type ActiveCall = {
+  id: string;
+  title: string;
+  status: string;
+  opensAt: string | null;
+  closesAt: string | null;
+  officialUrl: string | null;
+  localCriteria: LocalCriteriaSet | null;
+};
+
+type QualificationView = {
+  status: string;
+  summary: string;
+  activeCalls: ActiveCall[];
+};
+
+type CriterionAssessment = {
+  status: string;
+  confirmedPoints: number;
+  unresolvedMaxPoints: number;
+  possiblePointsRange: { minimum: number; maximum: number };
+  minimumPoints: number | null;
+  maximumPoints: number | null;
+  triggeredBlockers: Array<{ code: string; title: string }>;
+  unresolvedBlockers: Array<{ code: string; title: string }>;
+  disclaimer: string;
+};
+
 const API = process.env.NEXT_PUBLIC_API_BASE_URL ?? 'http://localhost:4000';
 
 export default function Home() {
@@ -55,15 +103,32 @@ export default function Home() {
   const [emailCodeSent, setEmailCodeSent] = useState(false);
   const [employmentStatus, setEmploymentStatus] = useState('UNEMPLOYED_REGISTERED');
   const [description, setDescription] = useState('');
-  const [qualification, setQualification] = useState<{
-    status: string;
-    summary: string;
-  } | null>(null);
+  const [caseId, setCaseId] = useState<string | null>(null);
+  const [qualification, setQualification] = useState<QualificationView | null>(null);
+  const [criterionAnswers, setCriterionAnswers] = useState<Record<string, unknown>>({});
+  const [criterionAssessment, setCriterionAssessment] = useState<CriterionAssessment | null>(null);
 
   const authHeaders = useMemo(
     () => token ? { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' } : undefined,
     [token]
   );
+
+  function scoringConfig(value: unknown): Record<string, unknown> | null {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+    return value as Record<string, unknown>;
+  }
+
+  function assessmentLabel(status: string) {
+    const labels: Record<string, string> = {
+      BLOCKING_RULE_TRIGGERED: 'Wykryto regułę blokującą',
+      BELOW_THRESHOLD_RANGE: 'Zakres poniżej progu',
+      NUMERIC_THRESHOLD_REACHED: 'Próg liczbowy osiągnięty',
+      PENDING_REVIEW: 'Wymaga dalszej oceny',
+      NO_VERIFIED_THRESHOLD: 'Brak zweryfikowanego progu'
+    };
+    return labels[status] ?? status;
+  }
+
 
   useEffect(() => {
     const webApp = window.Telegram?.WebApp;
@@ -285,6 +350,48 @@ export default function Home() {
     }
   }
 
+
+  async function assessCriteria(criterionSetId: string) {
+    if (!caseId || !token) return;
+    setBusy(true);
+    setError(null);
+
+    try {
+      const res = await fetch(
+        `${API}/v1/cases/${caseId}/criterion-assessment`,
+        {
+          method: 'POST',
+          headers: authHeaders,
+          body: JSON.stringify({
+            criterionSetId,
+            answers: criterionAnswers
+          })
+        }
+      );
+
+      if (!res.ok) {
+        throw new Error('Nie udało się policzyć samooceny kryteriów.');
+      }
+
+      const data = await res.json();
+      setCriterionAssessment({
+        status: data.status,
+        confirmedPoints: data.confirmedPoints,
+        unresolvedMaxPoints: data.unresolvedMaxPoints,
+        possiblePointsRange: data.possiblePointsRange,
+        minimumPoints: data.minimumPoints,
+        maximumPoints: data.maximumPoints,
+        triggeredBlockers: data.triggeredBlockers ?? [],
+        unresolvedBlockers: data.unresolvedBlockers ?? [],
+        disclaimer: data.disclaimer
+      });
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Błąd samooceny kryteriów');
+    } finally {
+      setBusy(false);
+    }
+  }
+
   async function startCase() {
     if (!token) return;
     setBusy(true);
@@ -298,10 +405,11 @@ export default function Home() {
       if (!res.ok) throw new Error('Nie udało się utworzyć sprawy.');
 
       const data = await res.json();
-      const caseId = data.case.id;
+      const newCaseId = data.case.id;
+      setCaseId(newCaseId);
 
       const qualificationResponse = await fetch(
-        `${API}/v1/cases/${caseId}/qualify`,
+        `${API}/v1/cases/${newCaseId}/qualify`,
         {
           method: 'POST',
           headers: authHeaders
@@ -314,7 +422,8 @@ export default function Home() {
         if (firstPath) {
           setQualification({
             status: firstPath.status,
-            summary: firstPath.summary
+            summary: firstPath.summary,
+            activeCalls: firstPath.activeCalls ?? []
           });
         }
       }
@@ -448,6 +557,195 @@ export default function Home() {
           {qualification ? <>
             <p className="qualification-status">{qualification.status}</p>
             <p>{qualification.summary}</p>
+
+            {qualification.activeCalls.length > 0 ? (
+              <div className="funding-list">
+                {qualification.activeCalls.map((call) => (
+                  <section className="funding-call" key={call.id}>
+                    <div className="funding-call-head">
+                      <span className="call-state">{call.status}</span>
+                      <h3>{call.title}</h3>
+                    </div>
+
+                    <p className="call-meta">
+                      {call.opensAt ? `Start: ${new Date(call.opensAt).toLocaleDateString('pl-PL')}` : 'Start: wg ogłoszenia'}
+                      {' · '}
+                      {call.closesAt ? `Koniec: ${new Date(call.closesAt).toLocaleDateString('pl-PL')}` : 'Koniec: wg ogłoszenia'}
+                    </p>
+
+                    {call.officialUrl && (
+                      <a className="source-link" href={call.officialUrl} target="_blank" rel="noreferrer">
+                        Oficjalne ogłoszenie
+                      </a>
+                    )}
+
+                    {call.localCriteria ? (
+                      <div className="criteria-panel">
+                        <h3>Kryteria punktowe</h3>
+                        <p>
+                          {call.localCriteria.minimumPoints !== null
+                            ? `Zweryfikowany próg: ${call.localCriteria.minimumPoints} pkt.`
+                            : 'Brak zweryfikowanego progu punktowego.'}
+                          {call.localCriteria.maximumPoints !== null
+                            ? ` Maksymalnie: ${call.localCriteria.maximumPoints} pkt.`
+                            : ''}
+                        </p>
+
+                        <a
+                          className="source-link"
+                          href={call.localCriteria.officialSourceUrl}
+                          target="_blank"
+                          rel="noreferrer"
+                        >
+                          Oficjalne źródło kryteriów
+                        </a>
+
+                        <div className="criteria-list">
+                          {call.localCriteria.criteria.map((criterion) => {
+                            const config = scoringConfig(criterion.scoring);
+                            const auto = config?.mode === 'AUTO';
+                            const type = typeof config?.type === 'string' ? config.type : null;
+
+                            return (
+                              <div className="criterion" key={criterion.code}>
+                                <div className="criterion-title">
+                                  <strong>{criterion.title}</strong>
+                                  <span>
+                                    {criterion.maxPoints !== null ? `max ${criterion.maxPoints} pkt` : 'punkty wg regulaminu'}
+                                  </span>
+                                </div>
+
+                                {criterion.description && <p>{criterion.description}</p>}
+                                {criterion.failIfZero && <p className="warning">0 pkt może blokować dalszą ocenę.</p>}
+
+                                {auto && type === 'BOOLEAN_POINTS' && (
+                                  <label>
+                                    Odpowiedź
+                                    <select
+                                      value={
+                                        criterionAnswers[criterion.code] === true
+                                          ? 'true'
+                                          : criterionAnswers[criterion.code] === false
+                                            ? 'false'
+                                            : ''
+                                      }
+                                      onChange={(e) => setCriterionAnswers({
+                                        ...criterionAnswers,
+                                        [criterion.code]: e.target.value === ''
+                                          ? undefined
+                                          : e.target.value === 'true'
+                                      })}
+                                    >
+                                      <option value="">Wybierz</option>
+                                      <option value="true">Tak</option>
+                                      <option value="false">Nie</option>
+                                    </select>
+                                  </label>
+                                )}
+
+                                {auto && type === 'ENUM_POINTS' && (() => {
+                                  const options = scoringConfig(config?.options);
+                                  return options ? (
+                                    <label>
+                                      Odpowiedź
+                                      <select
+                                        value={String(criterionAnswers[criterion.code] ?? '')}
+                                        onChange={(e) => setCriterionAnswers({
+                                          ...criterionAnswers,
+                                          [criterion.code]: e.target.value || undefined
+                                        })}
+                                      >
+                                        <option value="">Wybierz</option>
+                                        {Object.keys(options).map((option) => (
+                                          <option key={option} value={option}>{option}</option>
+                                        ))}
+                                      </select>
+                                    </label>
+                                  ) : null;
+                                })()}
+
+                                {auto && type === 'NUMBER_RANGES' && (
+                                  <label>
+                                    Wartość
+                                    <input
+                                      type="number"
+                                      value={
+                                        typeof criterionAnswers[criterion.code] === 'number'
+                                          ? String(criterionAnswers[criterion.code])
+                                          : ''
+                                      }
+                                      onChange={(e) => setCriterionAnswers({
+                                        ...criterionAnswers,
+                                        [criterion.code]: e.target.value === ''
+                                          ? undefined
+                                          : Number(e.target.value)
+                                      })}
+                                    />
+                                  </label>
+                                )}
+
+                                {!auto && (
+                                  <p className="manual-review">
+                                    Wymaga oceny urzędu — DotacjaPRO nie przyznaje tu punktów automatycznie.
+                                  </p>
+                                )}
+                              </div>
+                            );
+                          })}
+                        </div>
+
+                        <button
+                          onClick={() => assessCriteria(call.localCriteria!.id)}
+                          disabled={busy}
+                        >
+                          {busy ? 'Liczenie…' : 'Policz bezpieczny zakres punktów'}
+                        </button>
+
+                        {criterionAssessment && (
+                          <div className="assessment">
+                            <span className="qualification-status">
+                              {assessmentLabel(criterionAssessment.status)}
+                            </span>
+                            <h3>
+                              {criterionAssessment.possiblePointsRange.minimum}
+                              {'–'}
+                              {criterionAssessment.possiblePointsRange.maximum} pkt
+                            </h3>
+                            <p>
+                              Potwierdzone automatycznie: {criterionAssessment.confirmedPoints} pkt.
+                              {' '}
+                              Do oceny pozostaje maksymalnie {criterionAssessment.unresolvedMaxPoints} pkt.
+                            </p>
+                            {criterionAssessment.minimumPoints !== null && (
+                              <p>Próg: {criterionAssessment.minimumPoints} pkt.</p>
+                            )}
+                            {criterionAssessment.triggeredBlockers.length > 0 && (
+                              <p className="warning">
+                                Reguła blokująca: {criterionAssessment.triggeredBlockers.map((item) => item.title).join(', ')}
+                              </p>
+                            )}
+                            {criterionAssessment.unresolvedBlockers.length > 0 && (
+                              <p className="warning">
+                                Nierozstrzygnięte kryteria blokujące: {criterionAssessment.unresolvedBlockers.map((item) => item.title).join(', ')}
+                              </p>
+                            )}
+                            <p className="assessment-note">{criterionAssessment.disclaimer}</p>
+                          </div>
+                        )}
+                      </div>
+                    ) : (
+                      <p className="muted-box">
+                        Nabór jest zweryfikowany, ale nie ma jeszcze zweryfikowanego zestawu kryteriów punktowych.
+                      </p>
+                    )}
+                  </section>
+                ))}
+              </div>
+            ) : (
+              <p className="muted-box">
+                Nie ma obecnie zweryfikowanego aktywnego lub zapowiedzianego naboru dla tej ścieżki.
+              </p>
+            )}
           </> : <p>Profil jest gotowy do dalszej kwalifikacji i monitorowania aktualnych naborów.</p>}
         </>}
 
