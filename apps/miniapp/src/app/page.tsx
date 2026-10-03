@@ -1256,14 +1256,16 @@ export default function Home() {
     }
   }
 
-  const progressed = {
+  const progressed: Record<Step, number> = {
     welcome: 0,
+    legal: 0,
     region: 1,
     email: 2,
     employment: 3,
     business: 4,
     done: 5
-  }[step];
+  };
+  const progressValue = progressed[step];
 
   return (
     <main className="shell">
@@ -1422,7 +1424,7 @@ export default function Home() {
 
       <section className="card">
         <div className="progress">
-          {[1,2,3,4,5].map((n) => <span key={n} className={progressed >= n ? 'active' : ''}></span>)}
+          {[1,2,3,4,5].map((n) => <span key={n} className={progressValue >= n ? 'active' : ''}></span>)}
         </div>
 
         {step === 'welcome' && <>
