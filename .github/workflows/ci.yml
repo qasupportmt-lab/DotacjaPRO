@@ -16,4 +16,7 @@ jobs:
         with:
           node-version: 22
       - run: pnpm install --no-frozen-lockfile
+      - run: pnpm --filter @dotacjapro/db db:generate
+        env:
+          DATABASE_URL: postgresql://dotacjapro:dotacjapro@localhost:5432/dotacjapro
       - run: pnpm typecheck
