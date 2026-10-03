@@ -4,7 +4,7 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from fastapi import FastAPI, Header, HTTPException
 from zoneinfo import ZoneInfo
 
-from .scanner import scan_all_sources
+from .scanner import scan_all_sources, build_morning_digests
 
 app = FastAPI(title="DotacjaPRO Update Engine")
 scheduler = AsyncIOScheduler(timezone=ZoneInfo("Europe/Warsaw"))
@@ -24,6 +24,16 @@ async def startup():
         hour=5,
         minute=0,
         id="morning-source-scan",
+        replace_existing=True,
+        max_instances=1,
+        coalesce=True
+    )
+    scheduler.add_job(
+        build_morning_digests,
+        "cron",
+        hour=7,
+        minute=0,
+        id="morning-digest-builder",
         replace_existing=True,
         max_instances=1,
         coalesce=True
