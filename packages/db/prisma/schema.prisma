@@ -154,6 +154,9 @@ model OfficialFormTemplate {
   officialOnly     Boolean @default(true)
   mappingStatus    String  @default("UNMAPPED")
   mappingVerifiedAt DateTime?
+  mappingAnalyzedAt DateTime?
+  mappingAnalysisJson Json?
+  mappingAnalysisError String?
   mappingVersion   Int     @default(1)
   fieldMappings    FormFieldMapping[]
   renderJobs       DocumentRenderJob[]
