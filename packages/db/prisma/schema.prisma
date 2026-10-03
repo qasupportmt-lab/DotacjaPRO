@@ -167,7 +167,10 @@ model OfficialFormTemplate {
   mappingVersion   Int     @default(1)
   fieldMappings    FormFieldMapping[]
   renderJobs       DocumentRenderJob[]
+  fundingCallId    String?
+  fundingCall      FundingCall? @relation(fields: [fundingCallId], references: [id], onDelete: SetNull)
   @@index([institutionId, programCode, active])
+  @@index([fundingCallId, active])
 }
 
 model FormFieldMapping {
@@ -209,6 +212,7 @@ model FundingCall {
   verifiedAt         DateTime?
   cases              Case[]
   criterionSets       LocalCriterionSet[]
+  formTemplates       OfficialFormTemplate[]
   @@index([status, opensAt, closesAt])
   @@index([verificationStatus, verifiedAt])
 }
