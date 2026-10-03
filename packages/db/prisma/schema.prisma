@@ -213,6 +213,7 @@ model FundingCall {
   cases              Case[]
   criterionSets       LocalCriterionSet[]
   formTemplates       OfficialFormTemplate[]
+  submissionInstructions SubmissionInstructionVersion[]
   @@index([status, opensAt, closesAt])
   @@index([verificationStatus, verifiedAt])
 }
@@ -235,6 +236,7 @@ model Case {
   renderJobs          DocumentRenderJob[]
   qualifications      QualificationSnapshot[]
   criterionAssessments CriterionAssessmentSnapshot[]
+  packageJobs          DocumentPackageJob[]
   @@index([userId, status])
 }
 
@@ -448,4 +450,41 @@ model CriterionAssessmentSnapshot {
   createdAt      DateTime @default(now())
   @@index([caseId, createdAt])
   @@index([criterionSetId, createdAt])
+}
+
+
+model SubmissionInstructionVersion {
+  id            String   @id @default(cuid())
+  fundingCallId String
+  fundingCall   FundingCall @relation(fields: [fundingCallId], references: [id], onDelete: Cascade)
+  version       Int      @default(1)
+  status        String   @default("DRAFT")
+  instructionJson Json
+  sourceUrl     String
+  sourceHash    String?
+  analyzedAt    DateTime?
+  verifiedAt    DateTime?
+  createdAt     DateTime @default(now())
+  packageJobs   DocumentPackageJob[]
+  @@index([fundingCallId, status, verifiedAt])
+}
+
+model DocumentPackageJob {
+  id                      String   @id @default(cuid())
+  caseId                  String
+  case                    Case     @relation(fields: [caseId], references: [id], onDelete: Cascade)
+  submissionInstructionId String
+  submissionInstruction   SubmissionInstructionVersion @relation(fields: [submissionInstructionId], references: [id])
+  status                  String   @default("QUEUED")
+  recipientEmail          String
+  outputStorageKey        String?
+  outputSha256            String?
+  outputName              String?
+  errorCode               String?
+  errorMessage            String?
+  requestedAt             DateTime @default(now())
+  startedAt               DateTime?
+  completedAt             DateTime?
+  @@index([status, requestedAt])
+  @@index([caseId, requestedAt])
 }
