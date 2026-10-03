@@ -1,4 +1,18 @@
-from services.update_engine.app.pup_directory import parse_pup_directory
+import importlib.util
+from pathlib import Path
+
+MODULE_PATH = (
+    Path(__file__).resolve().parents[2]
+    / "update-engine"
+    / "app"
+    / "pup_directory.py"
+)
+
+spec = importlib.util.spec_from_file_location("dotacjapro_pup_directory", MODULE_PATH)
+module = importlib.util.module_from_spec(spec)
+assert spec and spec.loader
+spec.loader.exec_module(module)
+parse_pup_directory = module.parse_pup_directory
 
 
 def test_parses_main_office_and_branch_municipalities():
