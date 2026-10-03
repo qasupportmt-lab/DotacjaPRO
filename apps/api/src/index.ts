@@ -1150,6 +1150,183 @@ app.post('/v1/cases/:caseId/local-criteria/assess', async (request, reply) => {
   };
 });
 
+
+app.post('/v1/cases/:caseId/package', async (request, reply) => {
+  const userId = await requireUserId(request);
+  const caseId = (request.params as { caseId: string }).caseId;
+
+  const item = await prisma.case.findFirst({
+    where: { id: caseId, userId },
+    include: {
+      user: {
+        select: {
+          email: true,
+          emailVerifiedAt: true
+        }
+      },
+      fundingCall: {
+        include: {
+          institution: {
+            select: {
+              name: true,
+              officialUrl: true
+            }
+          }
+        }
+      }
+    }
+  });
+
+  if (!item) return reply.code(404).send({ error: 'CASE_NOT_FOUND' });
+  if (!item.user.email || !item.user.emailVerifiedAt) {
+    return reply.code(409).send({ error: 'VERIFIED_EMAIL_REQUIRED' });
+  }
+  if (!item.fundingCallId || !item.fundingCall) {
+    return reply.code(409).send({ error: 'FUNDING_CALL_SELECTION_REQUIRED' });
+  }
+  if (
+    item.fundingCall.verificationStatus !== 'VERIFIED' ||
+    !item.fundingCall.verifiedAt
+  ) {
+    return reply.code(409).send({ error: 'VERIFIED_FUNDING_CALL_REQUIRED' });
+  }
+
+  const instruction = await prisma.submissionInstructionVersion.findFirst({
+    where: {
+      fundingCallId: item.fundingCallId,
+      status: 'VERIFIED',
+      verifiedAt: { not: null }
+    },
+    orderBy: [
+      { verifiedAt: 'desc' },
+      { version: 'desc' }
+    ]
+  });
+
+  if (!instruction) {
+    return reply.code(409).send({ error: 'VERIFIED_SUBMISSION_INSTRUCTION_REQUIRED' });
+  }
+
+  const requiredTemplates = await prisma.officialFormTemplate.findMany({
+    where: {
+      fundingCallId: item.fundingCallId,
+      active: true,
+      officialOnly: true,
+      requiredForPackage: true,
+      mappingStatus: 'VERIFIED',
+      mappingVerifiedAt: { not: null }
+    },
+    select: {
+      id: true,
+      formCode: true,
+      sourceDocument: {
+        select: { originalName: true }
+      }
+    }
+  });
+
+  if (requiredTemplates.length === 0) {
+    return reply.code(409).send({ error: 'NO_VERIFIED_REQUIRED_FORMS' });
+  }
+
+  const completedJobs = await prisma.documentRenderJob.findMany({
+    where: {
+      caseId,
+      status: 'COMPLETED',
+      templateId: { in: requiredTemplates.map((template) => template.id) },
+      outputStorageKey: { not: null }
+    },
+    select: {
+      templateId: true,
+      outputStorageKey: true
+    }
+  });
+
+  const completedTemplateIds = new Set(completedJobs.map((job) => job.templateId));
+  const missing = requiredTemplates
+    .filter((template) => !completedTemplateIds.has(template.id))
+    .map((template) => ({
+      templateId: template.id,
+      formCode: template.formCode,
+      name: template.sourceDocument.originalName
+    }));
+
+  if (missing.length > 0) {
+    return reply.code(409).send({
+      error: 'PACKAGE_REQUIRED_DOCUMENTS_MISSING',
+      missing
+    });
+  }
+
+  const existingJob = await prisma.documentPackageJob.findFirst({
+    where: {
+      caseId,
+      status: { in: ['QUEUED', 'PROCESSING'] }
+    },
+    orderBy: { requestedAt: 'desc' }
+  });
+
+  if (existingJob) {
+    return reply.code(202).send({ job: existingJob, reused: true });
+  }
+
+  const job = await prisma.documentPackageJob.create({
+    data: {
+      caseId,
+      submissionInstructionId: instruction.id,
+      status: 'QUEUED',
+      recipientEmail: item.user.email
+    }
+  });
+
+  await prisma.auditEvent.create({
+    data: {
+      userId,
+      actorType: 'USER',
+      action: 'DOCUMENT_PACKAGE_REQUESTED',
+      entity: 'DocumentPackageJob',
+      entityId: job.id,
+      metadata: {
+        caseId,
+        fundingCallId: item.fundingCallId,
+        submissionInstructionId: instruction.id,
+        recipientEmailVerified: true,
+        requiredForms: requiredTemplates.map((template) => template.id)
+      }
+    }
+  });
+
+  return reply.code(202).send({ job, reused: false });
+});
+
+app.get('/v1/cases/:caseId/package/:jobId', async (request, reply) => {
+  const userId = await requireUserId(request);
+  const { caseId, jobId } = request.params as { caseId: string; jobId: string };
+
+  const job = await prisma.documentPackageJob.findFirst({
+    where: {
+      id: jobId,
+      caseId,
+      case: { userId }
+    },
+    select: {
+      id: true,
+      status: true,
+      outputName: true,
+      errorCode: true,
+      requestedAt: true,
+      startedAt: true,
+      completedAt: true
+    }
+  });
+
+  if (!job) {
+    return reply.code(404).send({ error: 'PACKAGE_JOB_NOT_FOUND' });
+  }
+
+  return { job };
+});
+
 app.get('/v1/me/dashboard', async (request) => {
   const userId = await requireUserId(request);
 
@@ -2251,6 +2428,219 @@ app.post('/v1/internal/templates/:id/reset-analysis', async (request, reply) => 
   return { templateId: id, status: 'UNMAPPED' };
 });
 
+
+app.post('/v1/internal/package-jobs/claim', async (request) => {
+  requireWorkerSecret(request);
+
+  for (let attempt = 0; attempt < 3; attempt++) {
+    const candidate = await prisma.documentPackageJob.findFirst({
+      where: { status: 'QUEUED' },
+      orderBy: { requestedAt: 'asc' },
+      select: { id: true }
+    });
+
+    if (!candidate) return { job: null };
+
+    const claimed = await prisma.documentPackageJob.updateMany({
+      where: { id: candidate.id, status: 'QUEUED' },
+      data: { status: 'PROCESSING', startedAt: new Date() }
+    });
+
+    if (claimed.count === 1) {
+      return { job: { id: candidate.id } };
+    }
+  }
+
+  return { job: null };
+});
+
+app.get('/v1/internal/package-jobs/:id/payload', async (request, reply) => {
+  requireWorkerSecret(request);
+  const id = (request.params as { id: string }).id;
+
+  const job = await prisma.documentPackageJob.findUnique({
+    where: { id },
+    include: {
+      submissionInstruction: true,
+      case: {
+        include: {
+          user: {
+            select: {
+              email: true,
+              emailVerifiedAt: true,
+              telegramFirstName: true,
+              telegramLastName: true
+            }
+          },
+          fundingCall: {
+            include: {
+              institution: {
+                select: {
+                  name: true,
+                  officialUrl: true
+                }
+              }
+            }
+          },
+          renderJobs: {
+            where: {
+              status: 'COMPLETED',
+              outputStorageKey: { not: null }
+            },
+            include: {
+              template: {
+                include: {
+                  sourceDocument: true
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  });
+
+  if (!job) return reply.code(404).send({ error: 'PACKAGE_JOB_NOT_FOUND' });
+  if (job.status !== 'PROCESSING') {
+    return reply.code(409).send({ error: 'PACKAGE_JOB_NOT_PROCESSING' });
+  }
+  if (!job.case.user.email || !job.case.user.emailVerifiedAt) {
+    return reply.code(409).send({ error: 'VERIFIED_EMAIL_REQUIRED' });
+  }
+  if (!job.case.fundingCall) {
+    return reply.code(409).send({ error: 'FUNDING_CALL_SELECTION_REQUIRED' });
+  }
+  if (
+    job.submissionInstruction.status !== 'VERIFIED' ||
+    !job.submissionInstruction.verifiedAt
+  ) {
+    return reply.code(409).send({ error: 'VERIFIED_SUBMISSION_INSTRUCTION_REQUIRED' });
+  }
+
+  const requiredDocuments = job.case.renderJobs
+    .filter((render) => render.template.requiredForPackage)
+    .map((render) => ({
+      renderJobId: render.id,
+      storageKey: render.outputStorageKey!,
+      outputName: render.outputName ?? render.template.sourceDocument.originalName,
+      mimeType: render.outputMimeType ?? render.template.sourceDocument.mimeType,
+      sourceSha256: render.template.sourceDocument.sha256,
+      formCode: render.template.formCode
+    }));
+
+  return {
+    job: {
+      id: job.id,
+      caseId: job.caseId,
+      recipientEmail: job.recipientEmail
+    },
+    applicant: {
+      firstName: job.case.user.telegramFirstName,
+      lastName: job.case.user.telegramLastName
+    },
+    fundingCall: {
+      id: job.case.fundingCall.id,
+      title: job.case.fundingCall.title,
+      officialUrl: job.case.fundingCall.officialUrl,
+      institutionName: job.case.fundingCall.institution.name,
+      institutionUrl: job.case.fundingCall.institution.officialUrl,
+      opensAt: job.case.fundingCall.opensAt,
+      closesAt: job.case.fundingCall.closesAt
+    },
+    submissionInstruction: {
+      id: job.submissionInstruction.id,
+      version: job.submissionInstruction.version,
+      instruction: job.submissionInstruction.instructionJson,
+      sourceUrl: job.submissionInstruction.sourceUrl,
+      sourceHash: job.submissionInstruction.sourceHash,
+      verifiedAt: job.submissionInstruction.verifiedAt
+    },
+    documents: requiredDocuments
+  };
+});
+
+const packageJobResultSchema = z.discriminatedUnion('success', [
+  z.object({
+    success: z.literal(true),
+    outputStorageKey: z.string().min(1).max(1500),
+    outputSha256: z.string().regex(/^[a-f0-9]{64}$/),
+    outputName: z.string().min(1).max(500)
+  }),
+  z.object({
+    success: z.literal(false),
+    errorCode: z.string().min(1).max(120),
+    errorMessage: z.string().min(1).max(4000)
+  })
+]);
+
+app.post('/v1/internal/package-jobs/:id/result', async (request, reply) => {
+  requireWorkerSecret(request);
+  const id = (request.params as { id: string }).id;
+  const parsed = packageJobResultSchema.safeParse(request.body);
+
+  if (!parsed.success) {
+    return reply.code(400).send({ error: 'INVALID_PACKAGE_JOB_RESULT' });
+  }
+
+  const job = await prisma.documentPackageJob.findUnique({
+    where: { id },
+    include: {
+      case: { select: { userId: true } }
+    }
+  });
+
+  if (!job) return reply.code(404).send({ error: 'PACKAGE_JOB_NOT_FOUND' });
+  if (!['QUEUED', 'PROCESSING'].includes(job.status)) {
+    return reply.code(409).send({ error: 'PACKAGE_JOB_ALREADY_FINALIZED' });
+  }
+
+  const resultData = parsed.data;
+
+  if (resultData.success === false) {
+    const failed = await prisma.documentPackageJob.update({
+      where: { id },
+      data: {
+        status: 'FAILED',
+        errorCode: resultData.errorCode,
+        errorMessage: resultData.errorMessage,
+        completedAt: new Date()
+      }
+    });
+
+    return { job: failed };
+  }
+
+  const completed = await prisma.documentPackageJob.update({
+    where: { id },
+    data: {
+      status: 'COMPLETED',
+      outputStorageKey: resultData.outputStorageKey,
+      outputSha256: resultData.outputSha256,
+      outputName: resultData.outputName,
+      errorCode: null,
+      errorMessage: null,
+      completedAt: new Date()
+    }
+  });
+
+  await prisma.auditEvent.create({
+    data: {
+      userId: job.case.userId,
+      actorType: 'SYSTEM',
+      action: 'DOCUMENT_PACKAGE_DELIVERED',
+      entity: 'DocumentPackageJob',
+      entityId: id,
+      metadata: {
+        caseId: job.caseId,
+        outputSha256: resultData.outputSha256,
+        outputName: resultData.outputName
+      }
+    }
+  });
+
+  return { job: completed };
+});
+
 app.post('/v1/internal/document-jobs/claim', async (request) => {
   requireWorkerSecret(request);
 
@@ -3113,6 +3503,172 @@ app.post('/v1/internal/criterion-sets/:id/verify', async (request, reply) => {
   });
 
   return { criterionSet: result };
+});
+
+
+const submissionInstructionSchema = z.object({
+  institutionName: z.string().min(2).max(500),
+  methods: z.array(z.enum(['IN_PERSON', 'POSTAL', 'ELECTRONIC'])).min(1).max(3),
+  address: z.string().max(1000).nullable().optional(),
+  electronicUrl: z.string().url().nullable().optional(),
+  officeRoom: z.string().max(200).nullable().optional(),
+  hoursText: z.string().max(1000).nullable().optional(),
+  deadlineText: z.string().max(1000).nullable().optional(),
+  requiredCopies: z.number().int().min(1).max(20).nullable().optional(),
+  signatureInstructions: z.string().max(3000).nullable().optional(),
+  attachmentsNote: z.string().max(3000).nullable().optional(),
+  notes: z.string().max(5000).nullable().optional()
+});
+
+const submissionInstructionDraftSchema = z.object({
+  fundingCallId: z.string().min(1),
+  instruction: submissionInstructionSchema,
+  sourceUrl: z.string().url(),
+  sourceHash: z.string().regex(/^[a-f0-9]{64}$/).optional()
+});
+
+app.post('/v1/internal/submission-instructions/upsert-draft', async (request, reply) => {
+  requireWorkerSecret(request);
+  const parsed = submissionInstructionDraftSchema.safeParse(request.body);
+
+  if (!parsed.success) {
+    return reply.code(400).send({
+      error: 'INVALID_SUBMISSION_INSTRUCTION_DRAFT',
+      details: parsed.error.flatten()
+    });
+  }
+
+  const call = await prisma.fundingCall.findUnique({
+    where: { id: parsed.data.fundingCallId },
+    select: {
+      id: true,
+      officialUrl: true,
+      verificationStatus: true,
+      verifiedAt: true
+    }
+  });
+
+  if (!call) {
+    return reply.code(404).send({ error: 'FUNDING_CALL_NOT_FOUND' });
+  }
+
+  const sameSource = await prisma.submissionInstructionVersion.findFirst({
+    where: {
+      fundingCallId: call.id,
+      sourceUrl: parsed.data.sourceUrl,
+      sourceHash: parsed.data.sourceHash ?? null
+    },
+    orderBy: { version: 'desc' }
+  });
+
+  if (sameSource?.status === 'VERIFIED') {
+    return {
+      instruction: sameSource,
+      protected: true,
+      reason: 'VERIFIED_INSTRUCTION_CANNOT_BE_OVERWRITTEN_BY_AUTOMATION'
+    };
+  }
+
+  let result;
+  if (sameSource) {
+    result = await prisma.submissionInstructionVersion.update({
+      where: { id: sameSource.id },
+      data: {
+        instructionJson: parsed.data.instruction as never,
+        status: 'DRAFT',
+        analyzedAt: new Date(),
+        verifiedAt: null
+      }
+    });
+  } else {
+    const latest = await prisma.submissionInstructionVersion.findFirst({
+      where: { fundingCallId: call.id },
+      orderBy: { version: 'desc' },
+      select: { version: true }
+    });
+
+    result = await prisma.submissionInstructionVersion.create({
+      data: {
+        fundingCallId: call.id,
+        version: (latest?.version ?? 0) + 1,
+        status: 'DRAFT',
+        instructionJson: parsed.data.instruction as never,
+        sourceUrl: parsed.data.sourceUrl,
+        sourceHash: parsed.data.sourceHash ?? null,
+        analyzedAt: new Date()
+      }
+    });
+  }
+
+  return { instruction: result, protected: false };
+});
+
+const verifySubmissionInstructionSchema = z.object({
+  instruction: submissionInstructionSchema.optional()
+});
+
+app.post('/v1/internal/submission-instructions/:id/verify', async (request, reply) => {
+  requireWorkerSecret(request);
+  const id = (request.params as { id: string }).id;
+  const parsed = verifySubmissionInstructionSchema.safeParse(request.body);
+
+  if (!parsed.success) {
+    return reply.code(400).send({
+      error: 'INVALID_SUBMISSION_INSTRUCTION_VERIFICATION',
+      details: parsed.error.flatten()
+    });
+  }
+
+  const existing = await prisma.submissionInstructionVersion.findUnique({
+    where: { id },
+    include: {
+      fundingCall: {
+        include: { source: true }
+      }
+    }
+  });
+
+  if (!existing) {
+    return reply.code(404).send({ error: 'SUBMISSION_INSTRUCTION_NOT_FOUND' });
+  }
+
+  if (
+    existing.fundingCall.verificationStatus !== 'VERIFIED' ||
+    !existing.fundingCall.verifiedAt
+  ) {
+    return reply.code(409).send({ error: 'VERIFIED_FUNDING_CALL_REQUIRED' });
+  }
+
+  const verified = await prisma.submissionInstructionVersion.update({
+    where: { id },
+    data: {
+      instructionJson: parsed.data.instruction === undefined
+        ? existing.instructionJson
+        : parsed.data.instruction as never,
+      status: 'VERIFIED',
+      verifiedAt: new Date()
+    }
+  });
+
+  await prisma.changeEvent.create({
+    data: {
+      sourceId: existing.fundingCall.sourceId,
+      changeType: 'SUBMISSION_INSTRUCTION_VERIFIED',
+      severity: 'INFORMATION',
+      summary: `Zweryfikowano instrukcję złożenia dla naboru: ${existing.fundingCall.title}`,
+      verified: true,
+      verifiedAt: new Date(),
+      verificationScore: 100,
+      payload: {
+        fundingCallId: existing.fundingCallId,
+        submissionInstructionId: verified.id,
+        sourceUrl: verified.sourceUrl,
+        sourceHash: verified.sourceHash
+      }
+    }
+  });
+
+  return { instruction: verified };
 });
 
 const verifyChangeSchema = z.object({
