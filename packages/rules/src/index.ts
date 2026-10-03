@@ -241,6 +241,96 @@ export function qualifyPupStartup(ctx: EligibilityContext): FundingPathQualifica
 }
 
 
+
+export type FundingProgramCode =
+  | 'PUP_STARTUP'
+  | 'EU_SELF_EMPLOYMENT'
+  | 'LGD_LEADER_STARTUP'
+  | 'BGK_SELF_EMPLOYMENT_LOAN'
+  | 'PFRON_STARTUP'
+  | 'ARIMR_WPR'
+  | 'SME_DEVELOPMENT';
+
+export interface FundingProgramCandidate {
+  code: FundingProgramCode;
+  reason: string;
+  priority: number;
+  requiresVerifiedCall: boolean;
+}
+
+export interface ProgramRoutingContext extends EligibilityContext {
+  existingBusinessLegalForm?: string | null;
+  wantsPfronPath?: boolean | null;
+}
+
+export function routeFundingProgramCandidates(
+  ctx: ProgramRoutingContext
+): FundingProgramCandidate[] {
+  const candidates: FundingProgramCandidate[] = [];
+  const existingBusiness = Boolean(ctx.existingBusinessLegalForm);
+  const starting = ctx.wantsToStartBusiness !== false && !existingBusiness;
+
+  if (existingBusiness) {
+    candidates.push({
+      code: 'SME_DEVELOPMENT',
+      reason: 'Profil wskazuje istniejącą działalność lub spółkę; należy szukać programów rozwojowych dla przedsiębiorstw.',
+      priority: 100,
+      requiresVerifiedCall: true
+    });
+  }
+
+  if (starting) {
+    candidates.push({
+      code: 'PUP_STARTUP',
+      reason: 'Użytkownik planuje rozpoczęcie działalności; ścieżka PUP powinna zostać sprawdzona, jeśli status zawodowy i właściwość urzędu na to pozwalają.',
+      priority: ctx.employmentStatus === 'UNEMPLOYED_REGISTERED' ? 100 : 70,
+      requiresVerifiedCall: true
+    });
+    candidates.push({
+      code: 'EU_SELF_EMPLOYMENT',
+      reason: 'Dla planowanej działalności należy sprawdzić aktualne projekty i nabory Funduszy Europejskich właściwe dla regionu i grupy docelowej.',
+      priority: 80,
+      requiresVerifiedCall: true
+    });
+    candidates.push({
+      code: 'LGD_LEADER_STARTUP',
+      reason: 'Jeżeli lokalizacja należy do obszaru LGD, należy sprawdzić aktualny nabór LEADER i jego lokalne kryteria.',
+      priority: 65,
+      requiresVerifiedCall: true
+    });
+    candidates.push({
+      code: 'BGK_SELF_EMPLOYMENT_LOAN',
+      reason: 'Pożyczka na samozatrudnienie może być alternatywą dla dotacji; aktualne warunki programu muszą zostać zweryfikowane.',
+      priority: 55,
+      requiresVerifiedCall: false
+    });
+  }
+
+  if (ctx.wantsPfronPath) {
+    candidates.push({
+      code: 'PFRON_STARTUP',
+      reason: 'Użytkownik świadomie wybrał sprawdzenie ścieżki PFRON; szczegółowe dane wrażliwe należy zbierać dopiero w tej ścieżce.',
+      priority: 95,
+      requiresVerifiedCall: true
+    });
+  }
+
+  if (ctx.employmentStatus === 'FARMER') {
+    candidates.push({
+      code: 'ARIMR_WPR',
+      reason: 'Profil wskazuje związek z działalnością rolniczą; należy sprawdzić właściwe interwencje i aktualne nabory PS WPR.',
+      priority: 90,
+      requiresVerifiedCall: true
+    });
+  }
+
+  return candidates
+    .filter((candidate, index, all) =>
+      all.findIndex((item) => item.code === candidate.code) === index
+    )
+    .sort((a, b) => b.priority - a.priority);
+}
+
 export const LOCAL_CRITERIA_ENGINE_VERSION = '2026-10-03.1';
 
 export interface LocalCriterionDefinition {
