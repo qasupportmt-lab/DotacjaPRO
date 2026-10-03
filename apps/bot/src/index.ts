@@ -200,6 +200,45 @@ const server = http.createServer(async (request, response) => {
       });
     }
 
+    if (request.method === 'GET' && url.pathname === '/ready') {
+      const missing = [
+        ['TELEGRAM_BOT_TOKEN', token],
+        ['API_BASE_URL', apiBaseUrl],
+        ['APP_BASE_URL', appBaseUrl],
+        ['INTERNAL_WORKER_SECRET', workerSecret],
+        ['CRON_SECRET', cronSecret],
+        ['TELEGRAM_WEBHOOK_SECRET', webhookSecret],
+        ['TELEGRAM_WEBHOOK_URL', publicWebhookUrl]
+      ].filter(([, value]) => !value).map(([name]) => name);
+
+      let apiReady = false;
+      let apiStatus: number | null = null;
+      let apiError: string | null = null;
+
+      if (missing.length === 0) {
+        try {
+          const apiResponse = await fetch(
+            apiBaseUrl.replace(/\/$/, '') + '/ready',
+            { signal: AbortSignal.timeout(10_000) }
+          );
+          apiStatus = apiResponse.status;
+          apiReady = apiResponse.ok;
+        } catch (error) {
+          apiError = error instanceof Error ? error.message : String(error);
+        }
+      }
+
+      const ready = missing.length === 0 && apiReady;
+      return json(response, ready ? 200 : 503, {
+        service: 'telegram-bot',
+        ready,
+        apiReady,
+        apiStatus,
+        missingEnv: missing,
+        apiError
+      });
+    }
+
     if (request.method === 'POST' && url.pathname === '/webhook') {
       if (!webhookAuthorized(request)) {
         return json(response, 401, {
