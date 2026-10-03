@@ -5,6 +5,7 @@ from fastapi import FastAPI, Header, HTTPException
 from zoneinfo import ZoneInfo
 
 from .scanner import scan_all_sources, build_morning_digests
+from .teryt import sync_teryt_from_urls
 
 app = FastAPI(title="DotacjaPRO Update Engine")
 scheduler = AsyncIOScheduler(timezone=ZoneInfo("Europe/Warsaw"))
@@ -18,6 +19,16 @@ def require_secret(x_worker_secret: str | None):
 
 @app.on_event("startup")
 async def startup():
+    scheduler.add_job(
+        sync_teryt_from_urls,
+        "cron",
+        hour=4,
+        minute=30,
+        id="daily-teryt-sync",
+        replace_existing=True,
+        max_instances=1,
+        coalesce=True
+    )
     scheduler.add_job(
         scan_all_sources,
         "cron",
@@ -63,7 +74,7 @@ def health():
         "service": "update-engine",
         "status": "ok",
         "timezone": "Europe/Warsaw",
-        "scan_schedule": ["05:00", "18:00"],
+        "scan_schedule": ["04:30 TERYT", "05:00 sources", "18:00 sources"],
         "digest_policy": "morning-if-relevant"
     }
 
@@ -72,3 +83,9 @@ def health():
 async def scan_now(x_worker_secret: str | None = Header(default=None)):
     require_secret(x_worker_secret)
     return await scan_all_sources()
+
+
+@app.post("/teryt-sync-now")
+async def teryt_sync_now(x_worker_secret: str | None = Header(default=None)):
+    require_secret(x_worker_secret)
+    return await sync_teryt_from_urls()
