@@ -492,8 +492,7 @@ async def ready():
         "INTERNAL_WORKER_SECRET",
     ]
     missing = [name for name in required if not os.getenv(name)]
-    if not email_provider_configured():
-        missing.append("EMAIL_PROVIDER")
+    email_configured = email_provider_configured()
 
     mode = os.getenv("OBJECT_STORAGE_MODE", "api").lower()
     if mode == "s3":
@@ -523,6 +522,7 @@ async def ready():
         "apiReady": api_ready,
         "apiStatus": api_status,
         "storageMode": mode,
+        "emailProviderConfigured": email_configured,
         "missingEnv": sorted(set(missing)),
         "apiError": api_error,
     }
