@@ -152,6 +152,9 @@ model OfficialFormTemplate {
   versionLabel     String?
   active           Boolean @default(true)
   officialOnly     Boolean @default(true)
+  mappingStatus    String  @default("UNMAPPED")
+  mappingVerifiedAt DateTime?
+  mappingVersion   Int     @default(1)
   fieldMappings    FormFieldMapping[]
   @@index([institutionId, programCode, active])
 }
@@ -160,11 +163,17 @@ model FormFieldMapping {
   id         String @id @default(cuid())
   templateId String
   template   OfficialFormTemplate @relation(fields: [templateId], references: [id], onDelete: Cascade)
-  fieldKey   String
-  sourcePath String
-  inputType  String
-  required   Boolean @default(false)
-  helpText   String?
+  fieldKey      String
+  sourcePath    String
+  locatorType   String
+  locatorJson   Json?
+  inputType     String
+  questionLabel String?
+  section       String?
+  sortOrder     Int     @default(0)
+  required      Boolean @default(false)
+  helpText      String?
+  validationJson Json?
   @@unique([templateId, fieldKey])
 }
 
@@ -280,4 +289,21 @@ model EmailVerification {
   consumedAt DateTime?
   createdAt  DateTime @default(now())
   @@index([userId, email, createdAt])
+}
+
+
+model DocumentRenderJob {
+  id             String   @id @default(cuid())
+  caseId         String
+  templateId     String
+  status         String   @default("QUEUED")
+  outputStorageKey String?
+  outputSha256   String?
+  errorCode      String?
+  errorMessage   String?
+  requestedAt    DateTime @default(now())
+  startedAt      DateTime?
+  completedAt    DateTime?
+  @@index([status, requestedAt])
+  @@index([caseId, templateId])
 }
