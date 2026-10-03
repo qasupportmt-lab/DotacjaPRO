@@ -33,3 +33,17 @@ def put_bytes(key: str, content: bytes, mime_type: str) -> None:
         Body=BytesIO(content),
         ContentType=mime_type,
     )
+
+
+def presigned_download_url(
+    key: str,
+    expires_seconds: int = 24 * 60 * 60,
+) -> str:
+    return _client().generate_presigned_url(
+        "get_object",
+        Params={
+            "Bucket": _bucket(),
+            "Key": key,
+        },
+        ExpiresIn=expires_seconds,
+    )
