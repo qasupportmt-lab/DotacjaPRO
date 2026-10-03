@@ -42,6 +42,70 @@ async function requireUserId(request: FastifyRequest) {
   return userId;
 }
 
+
+const regionSearchSchema = z.object({
+  voivodeship: z.enum(VOIVODESHIPS),
+  q: z.string().trim().min(2).max(120)
+});
+
+app.get('/v1/regions/search', async (request, reply) => {
+  const parsed = regionSearchSchema.safeParse(request.query);
+  if (!parsed.success) {
+    return reply.code(400).send({ error: 'INVALID_REGION_SEARCH' });
+  }
+
+  const items = await prisma.regionAssignment.findMany({
+    where: {
+      role: 'PUP',
+      voivodeship: parsed.data.voivodeship,
+      municipality: {
+        contains: parsed.data.q,
+        mode: 'insensitive'
+      },
+      OR: [
+        { validTo: null },
+        { validTo: { gte: new Date() } }
+      ]
+    },
+    include: {
+      institution: {
+        select: {
+          id: true,
+          name: true,
+          officialUrl: true
+        }
+      }
+    },
+    orderBy: [
+      { municipality: 'asc' },
+      { verifiedAt: 'desc' }
+    ],
+    take: 30
+  });
+
+  const unique = new Map<string, typeof items[number]>();
+  for (const item of items) {
+    const key = `${item.voivodeship}|${item.municipality?.toLowerCase()}`;
+    if (!unique.has(key)) unique.set(key, item);
+  }
+
+  return {
+    items: [...unique.values()].map((item) => ({
+      voivodeship: item.voivodeship,
+      county: item.county,
+      municipality: item.municipality,
+      city: item.city,
+      pup: {
+        id: item.institution.id,
+        name: item.institution.name,
+        officialUrl: item.institution.officialUrl
+      },
+      verifiedAt: item.verifiedAt,
+      sourceUrl: item.sourceUrl
+    }))
+  };
+});
+
 const authSchema = z.object({
   initData: z.string().min(10)
 });
