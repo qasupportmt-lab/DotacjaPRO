@@ -181,6 +181,11 @@ export default function Home() {
   const [packageJob, setPackageJob] = useState<PackageJobView | null>(null);
   const [packageMessage, setPackageMessage] = useState<string | null>(null);
   const [isAdmin, setIsAdmin] = useState(false);
+  const [adminOpen, setAdminOpen] = useState(false);
+  const [adminQueue, setAdminQueue] = useState<AdminReviewQueue | null>(null);
+  const [adminBusyId, setAdminBusyId] = useState<string | null>(null);
+  const [adminMessage, setAdminMessage] = useState<string | null>(null);
+  const [isAdmin, setIsAdmin] = useState(false);
   const [adminMode, setAdminMode] = useState(false);
   const [adminQueue, setAdminQueue] = useState<AdminReviewQueue | null>(null);
   const [adminMessage, setAdminMessage] = useState<string | null>(null);
@@ -549,6 +554,168 @@ export default function Home() {
       setError(e instanceof Error ? e.message : 'Błąd mapowania');
     } finally {
       setBusy(false);
+    }
+  }
+
+  async function loadAdminQueue() {
+    if (!token || !isAdmin) return;
+    setAdminMessage(null);
+
+    const res = await fetch(`${API}/v1/admin/review-queue`, {
+      headers: authHeaders
+    });
+
+    if (!res.ok) {
+      throw new Error('Nie udało się pobrać kolejki weryfikacji.');
+    }
+
+    const data = await res.json();
+    setAdminQueue(data);
+  }
+
+  async function openAdminPanel() {
+    setAdminOpen(true);
+    setBusy(true);
+    setError(null);
+    try {
+      await loadAdminQueue();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Błąd panelu administratora');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function adminVerifyFundingCall(item: any) {
+    if (!token) return;
+    const evidence = item.evidenceJson ?? {};
+    const candidateStatus = evidence.candidateStatus;
+
+    if (!['ANNOUNCED', 'OPEN', 'CLOSED', 'SUSPENDED'].includes(candidateStatus)) {
+      setAdminMessage('Ten nabór nie ma jednoznacznie wykrytego statusu. Najpierw popraw dane w źródle administracyjnym.');
+      return;
+    }
+
+    setAdminBusyId(item.id);
+    setAdminMessage(null);
+    try {
+      const body: Record<string, unknown> = {
+        status: candidateStatus,
+        untilExhausted: Boolean(evidence.candidateUntilExhausted)
+      };
+      if (evidence.candidateOpensAt) body.opensAt = evidence.candidateOpensAt;
+      if (evidence.candidateClosesAt) body.closesAt = evidence.candidateClosesAt;
+      if (item.programCode) body.programCode = item.programCode;
+
+      const res = await fetch(
+        `${API}/v1/admin/funding-calls/${item.id}/verify`,
+        {
+          method: 'POST',
+          headers: authHeaders,
+          body: JSON.stringify(body)
+        }
+      );
+      if (!res.ok) throw new Error('Nie udało się zatwierdzić naboru.');
+      setAdminMessage('Nabór został oznaczony jako VERIFIED.');
+      await loadAdminQueue();
+    } catch (e) {
+      setAdminMessage(e instanceof Error ? e.message : 'Błąd weryfikacji naboru');
+    } finally {
+      setAdminBusyId(null);
+    }
+  }
+
+  async function adminVerifySubmissionInstruction(item: any) {
+    if (!token) return;
+    setAdminBusyId(item.id);
+    setAdminMessage(null);
+    try {
+      const res = await fetch(
+        `${API}/v1/admin/submission-instructions/${item.id}/verify`,
+        {
+          method: 'POST',
+          headers: authHeaders,
+          body: JSON.stringify({})
+        }
+      );
+      if (!res.ok) throw new Error('Nie udało się zatwierdzić instrukcji.');
+      setAdminMessage('Instrukcja złożenia została oznaczona jako VERIFIED.');
+      await loadAdminQueue();
+    } catch (e) {
+      setAdminMessage(e instanceof Error ? e.message : 'Błąd weryfikacji instrukcji');
+    } finally {
+      setAdminBusyId(null);
+    }
+  }
+
+  async function adminVerifyCriterionSet(item: any) {
+    if (!token) return;
+    setAdminBusyId(item.id);
+    setAdminMessage(null);
+    try {
+      const res = await fetch(
+        `${API}/v1/admin/criterion-sets/${item.id}/verify`,
+        {
+          method: 'POST',
+          headers: authHeaders,
+          body: JSON.stringify({})
+        }
+      );
+      if (!res.ok) throw new Error('Nie udało się zatwierdzić kryteriów.');
+      setAdminMessage('Zestaw kryteriów został oznaczony jako VERIFIED.');
+      await loadAdminQueue();
+    } catch (e) {
+      setAdminMessage(e instanceof Error ? e.message : 'Błąd weryfikacji kryteriów');
+    } finally {
+      setAdminBusyId(null);
+    }
+  }
+
+  async function adminVerifyTemplate(item: any) {
+    if (!token) return;
+    if (!Array.isArray(item.fieldMappings) || item.fieldMappings.length === 0) {
+      setAdminMessage('Formularz nie ma jeszcze mapowania pól do zatwierdzenia.');
+      return;
+    }
+
+    setAdminBusyId(item.id);
+    setAdminMessage(null);
+    try {
+      const mappings = item.fieldMappings.map((mapping: any) => ({
+        fieldKey: mapping.fieldKey,
+        sourcePath: mapping.sourcePath,
+        locatorType: mapping.locatorType,
+        locatorJson: mapping.locatorJson ?? undefined,
+        inputType: mapping.inputType,
+        questionLabel: mapping.questionLabel ?? undefined,
+        section: mapping.section ?? undefined,
+        sortOrder: mapping.sortOrder ?? 0,
+        required: Boolean(mapping.required),
+        helpText: mapping.helpText ?? undefined,
+        validationJson: mapping.validationJson ?? undefined
+      }));
+
+      const res = await fetch(
+        `${API}/v1/admin/templates/${item.id}/mappings`,
+        {
+          method: 'PUT',
+          headers: authHeaders,
+          body: JSON.stringify({
+            mappingStatus: 'VERIFIED',
+            requiredForPackage: item.requiredForPackage !== false,
+            analysis: item.mappingAnalysisJson ?? undefined,
+            mappings
+          })
+        }
+      );
+
+      if (!res.ok) throw new Error('Nie udało się zatwierdzić mapowania formularza.');
+      setAdminMessage('Mapowanie formularza zostało oznaczone jako VERIFIED.');
+      await loadAdminQueue();
+    } catch (e) {
+      setAdminMessage(e instanceof Error ? e.message : 'Błąd weryfikacji formularza');
+    } finally {
+      setAdminBusyId(null);
     }
   }
 
