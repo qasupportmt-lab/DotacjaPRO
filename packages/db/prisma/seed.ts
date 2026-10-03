@@ -13,9 +13,9 @@ const institutions = [
     scopeVoivodeship: 'śląskie'
   },
   {
-    code: 'PUP_KATOWICE_CALL_2026',
+    code: 'PUP:katowice.praca.gov.pl',
     type: 'PUP',
-    name: 'Powiatowy Urząd Pracy w Katowicach — nabór działalność 2026',
+    name: 'Powiatowy Urząd Pracy w Katowicach',
     officialUrl: 'https://katowice.praca.gov.pl/',
     source: 'https://katowice.praca.gov.pl/rynek-pracy/aktualnosci/-/asset_publisher/8VCc6CLiHUaO/content/nabor-wnioskow-o-dofinansowanie-przyznanie-bezrobotnemu-srodkow-na-podjecie-dzialalnosci-gospodarczej-1?p_r_p_assetEntryId=58924503',
     kind: 'PUP_CALL_PAGE',
