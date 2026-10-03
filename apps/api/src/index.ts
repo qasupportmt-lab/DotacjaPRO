@@ -588,6 +588,8 @@ app.post('/v1/cases/:caseId/qualify', async (request, reply) => {
     ? await prisma.fundingCall.findMany({
         where: {
           institutionId: profile.pupOfficeId,
+          verificationStatus: 'VERIFIED',
+          verifiedAt: { not: null },
           status: { in: ['OPEN', 'ANNOUNCED'] },
           OR: [
             { closesAt: null },
@@ -1923,6 +1925,222 @@ app.post('/v1/internal/teryt/import', async (request, reply) => {
   };
 });
 
+
+
+const callPageImportSchema = z.object({
+  parentSourceId: z.string().min(1),
+  pages: z.array(z.object({
+    name: z.string().min(1).max(500),
+    url: z.string().url()
+  })).min(1).max(100)
+});
+
+app.post('/v1/internal/call-pages/import', async (request, reply) => {
+  requireWorkerSecret(request);
+  const parsed = callPageImportSchema.safeParse(request.body);
+
+  if (!parsed.success) {
+    return reply.code(400).send({
+      error: 'INVALID_CALL_PAGES',
+      details: parsed.error.flatten()
+    });
+  }
+
+  const parent = await prisma.source.findUnique({
+    where: { id: parsed.data.parentSourceId }
+  });
+
+  if (!parent || !parent.institutionId) {
+    return reply.code(404).send({ error: 'PARENT_SOURCE_NOT_FOUND' });
+  }
+
+  const imported = [];
+  for (const page of parsed.data.pages) {
+    const child = await prisma.source.upsert({
+      where: { canonicalUrl: page.url },
+      update: {
+        institutionId: parent.institutionId,
+        kind: 'PUP_CALL_PAGE',
+        displayName: page.name,
+        discoveredFromUrl: parent.canonicalUrl,
+        trustLevel: 'OFFICIAL_PRIMARY',
+        enabled: true,
+        scopeVoivodeship: parent.scopeVoivodeship,
+        scopeCounty: parent.scopeCounty,
+        scopeMunicipality: parent.scopeMunicipality
+      },
+      create: {
+        institutionId: parent.institutionId,
+        kind: 'PUP_CALL_PAGE',
+        canonicalUrl: page.url,
+        displayName: page.name,
+        discoveredFromUrl: parent.canonicalUrl,
+        trustLevel: 'OFFICIAL_PRIMARY',
+        enabled: true,
+        scopeVoivodeship: parent.scopeVoivodeship,
+        scopeCounty: parent.scopeCounty,
+        scopeMunicipality: parent.scopeMunicipality
+      }
+    });
+
+    imported.push({
+      id: child.id,
+      name: child.displayName,
+      url: child.canonicalUrl
+    });
+  }
+
+  return { imported };
+});
+
+const fundingCallDraftSchema = z.object({
+  sourceId: z.string().min(1),
+  title: z.string().min(3).max(700),
+  officialUrl: z.string().url(),
+  programCode: z.string().max(120).optional(),
+  candidateStatus: z.enum(['DISCOVERED', 'ANNOUNCED', 'OPEN', 'CLOSED', 'SUSPENDED']).optional(),
+  opensAt: z.string().datetime().optional(),
+  closesAt: z.string().datetime().optional(),
+  untilExhausted: z.boolean().optional(),
+  evidence: z.unknown().optional()
+});
+
+app.post('/v1/internal/funding-calls/upsert-draft', async (request, reply) => {
+  requireWorkerSecret(request);
+  const parsed = fundingCallDraftSchema.safeParse(request.body);
+
+  if (!parsed.success) {
+    return reply.code(400).send({
+      error: 'INVALID_FUNDING_CALL_DRAFT',
+      details: parsed.error.flatten()
+    });
+  }
+
+  const source = await prisma.source.findUnique({
+    where: { id: parsed.data.sourceId }
+  });
+
+  if (!source?.institutionId) {
+    return reply.code(404).send({ error: 'CALL_SOURCE_NOT_FOUND' });
+  }
+
+  const now = new Date();
+  const evidence = {
+    candidateStatus: parsed.data.candidateStatus ?? 'DISCOVERED',
+    candidateOpensAt: parsed.data.opensAt ?? null,
+    candidateClosesAt: parsed.data.closesAt ?? null,
+    candidateUntilExhausted: parsed.data.untilExhausted ?? false,
+    parserEvidence: parsed.data.evidence ?? null
+  };
+
+  const call = await prisma.fundingCall.upsert({
+    where: { sourceId: source.id },
+    update: {
+      institutionId: source.institutionId,
+      title: parsed.data.title,
+      programCode: parsed.data.programCode ?? null,
+      officialUrl: parsed.data.officialUrl,
+      verificationStatus: 'DRAFT',
+      evidenceJson: evidence as never,
+      sourceHash: source.contentHash,
+      lastSeenAt: now
+    },
+    create: {
+      institutionId: source.institutionId,
+      sourceId: source.id,
+      title: parsed.data.title,
+      programCode: parsed.data.programCode ?? null,
+      status: 'DISCOVERED',
+      officialUrl: parsed.data.officialUrl,
+      verificationStatus: 'DRAFT',
+      evidenceJson: evidence as never,
+      sourceHash: source.contentHash,
+      discoveredAt: now,
+      lastSeenAt: now
+    }
+  });
+
+  return { call };
+});
+
+const verifyFundingCallSchema = z.object({
+  status: z.enum(['ANNOUNCED', 'OPEN', 'CLOSED', 'SUSPENDED']),
+  opensAt: z.string().datetime().nullable().optional(),
+  closesAt: z.string().datetime().nullable().optional(),
+  untilExhausted: z.boolean().default(false),
+  programCode: z.string().max(120).nullable().optional()
+});
+
+app.post('/v1/internal/funding-calls/:id/verify', async (request, reply) => {
+  requireWorkerSecret(request);
+  const id = (request.params as { id: string }).id;
+  const parsed = verifyFundingCallSchema.safeParse(request.body);
+
+  if (!parsed.success) {
+    return reply.code(400).send({
+      error: 'INVALID_FUNDING_CALL_VERIFICATION',
+      details: parsed.error.flatten()
+    });
+  }
+
+  const existing = await prisma.fundingCall.findUnique({
+    where: { id },
+    include: { source: true }
+  });
+
+  if (!existing) {
+    return reply.code(404).send({ error: 'FUNDING_CALL_NOT_FOUND' });
+  }
+
+  const now = new Date();
+  const updated = await prisma.fundingCall.update({
+    where: { id },
+    data: {
+      status: parsed.data.status,
+      opensAt: parsed.data.opensAt === undefined
+        ? existing.opensAt
+        : parsed.data.opensAt
+          ? new Date(parsed.data.opensAt)
+          : null,
+      closesAt: parsed.data.closesAt === undefined
+        ? existing.closesAt
+        : parsed.data.closesAt
+          ? new Date(parsed.data.closesAt)
+          : null,
+      untilExhausted: parsed.data.untilExhausted,
+      programCode: parsed.data.programCode === undefined
+        ? existing.programCode
+        : parsed.data.programCode,
+      verificationStatus: 'VERIFIED',
+      verifiedAt: now,
+      lastSeenAt: now
+    }
+  });
+
+  const source = existing.source;
+  await prisma.changeEvent.create({
+    data: {
+      sourceId: source?.id ?? null,
+      changeType: 'FUNDING_CALL_VERIFIED',
+      severity: parsed.data.status === 'OPEN' ? 'YELLOW' : 'INFORMATION',
+      summary: `Zweryfikowano nabór: ${updated.title} (${updated.status})`,
+      verified: true,
+      verifiedAt: now,
+      verificationScore: 100,
+      payload: {
+        fundingCallId: updated.id,
+        status: updated.status,
+        opensAt: updated.opensAt,
+        closesAt: updated.closesAt,
+        scopeVoivodeship: source?.scopeVoivodeship ?? null,
+        scopeCounty: source?.scopeCounty ?? null,
+        scopeMunicipality: source?.scopeMunicipality ?? null
+      }
+    }
+  });
+
+  return { call: updated };
+});
 
 const verifyChangeSchema = z.object({
   verified: z.boolean(),
