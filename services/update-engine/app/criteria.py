@@ -76,9 +76,7 @@ def analyze_criteria_text(text: str, title: str = "Kryteria oceny") -> dict:
 
         criteria.append({
             "code": f"AUTO-{len(criteria) + 1:03d}",
-            "category": None,
             "title": criterion_title,
-            "description": None,
             "maxPoints": max_points,
             "failIfZero": False,
             "scoringJson": {
