@@ -4,6 +4,15 @@ const prisma = new PrismaClient();
 
 const institutions = [
   {
+    code: 'WUP_KATOWICE_DIRECTORY',
+    type: 'REGIONAL_LABOUR_OFFICE',
+    name: 'Wojewódzki Urząd Pracy w Katowicach — wykaz PUP',
+    officialUrl: 'https://wupkatowice.praca.gov.pl/',
+    source: 'https://wupkatowice.praca.gov.pl/-/840189-powiatowe-urzedy-pracy',
+    kind: 'PUP_DIRECTORY',
+    scopeVoivodeship: 'śląskie'
+  },
+  {
     code: 'PORTAL_FE',
     type: 'FUNDING_PORTAL',
     name: 'Portal Funduszy Europejskich',
@@ -76,14 +85,16 @@ async function main() {
         institutionId: institution.id,
         kind: item.kind,
         trustLevel: 'OFFICIAL_PRIMARY',
-        enabled: true
+        enabled: true,
+        scopeVoivodeship: 'scopeVoivodeship' in item ? item.scopeVoivodeship : null
       },
       create: {
         institutionId: institution.id,
         kind: item.kind,
         canonicalUrl: item.source,
         trustLevel: 'OFFICIAL_PRIMARY',
-        enabled: true
+        enabled: true,
+        scopeVoivodeship: 'scopeVoivodeship' in item ? item.scopeVoivodeship : null
       }
     });
   }
