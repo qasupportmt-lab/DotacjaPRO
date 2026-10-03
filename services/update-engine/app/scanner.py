@@ -5,6 +5,7 @@ from datetime import datetime, timezone
 
 import httpx
 
+from .funding_call import analyze_funding_call_page, discover_call_pages
 from .official_attachments import discover_official_attachments
 from .pup_directory import parse_pup_directory
 from .storage import put_official_document
@@ -25,6 +26,63 @@ def worker_headers() -> dict[str, str]:
     if not WORKER_SECRET:
         raise RuntimeError("INTERNAL_WORKER_SECRET is required")
     return {"x-worker-secret": WORKER_SECRET}
+
+
+
+async def import_call_pages(
+    client: httpx.AsyncClient,
+    source: dict,
+    html: str,
+) -> list[dict]:
+    pages = discover_call_pages(html, source["canonicalUrl"])
+    if not pages:
+        return []
+
+    response = await client.post(
+        f"{API_BASE_URL}/v1/internal/call-pages/import",
+        headers={**worker_headers(), "Content-Type": "application/json"},
+        json={
+            "parentSourceId": source["id"],
+            "pages": pages,
+        },
+    )
+    response.raise_for_status()
+    return response.json().get("imported", [])
+
+
+async def upsert_funding_call_draft(
+    client: httpx.AsyncClient,
+    source: dict,
+    html: str,
+) -> dict:
+    candidate = analyze_funding_call_page(
+        html,
+        source["canonicalUrl"],
+    )
+
+    payload = {
+        "sourceId": source["id"],
+        "title": candidate["title"],
+        "officialUrl": candidate["officialUrl"],
+        "candidateStatus": candidate["candidateStatus"],
+        "untilExhausted": candidate["untilExhausted"],
+        "evidence": candidate["evidence"],
+    }
+
+    if candidate.get("programCode"):
+        payload["programCode"] = candidate["programCode"]
+    if candidate.get("opensAt"):
+        payload["opensAt"] = candidate["opensAt"]
+    if candidate.get("closesAt"):
+        payload["closesAt"] = candidate["closesAt"]
+
+    response = await client.post(
+        f"{API_BASE_URL}/v1/internal/funding-calls/upsert-draft",
+        headers={**worker_headers(), "Content-Type": "application/json"},
+        json=payload,
+    )
+    response.raise_for_status()
+    return response.json()
 
 
 async def import_source_attachments(
@@ -166,6 +224,28 @@ async def scan_source(client: httpx.AsyncClient, source: dict) -> dict:
             response.text,
         )
 
+    discovered_call_pages: list[dict] = []
+    if (
+        source.get("kind") == "PUP_HOME"
+        and response.status_code != 304
+    ):
+        discovered_call_pages = await import_call_pages(
+            client,
+            source,
+            response.text,
+        )
+
+    funding_call_draft = None
+    if (
+        source.get("kind") in {"PUP_CALL_PAGE", "FUNDING_CALL_PAGE"}
+        and response.status_code != 304
+    ):
+        funding_call_draft = await upsert_funding_call_draft(
+            client,
+            source,
+            response.text,
+        )
+
     discovered_attachments: list[dict] = []
     attachment_scans: list[dict] = []
 
@@ -211,6 +291,8 @@ async def scan_source(client: httpx.AsyncClient, source: dict) -> dict:
         "url": source["canonicalUrl"],
         "httpStatus": response.status_code,
         "directoryImport": directory_import,
+        "discoveredCallPages": len(discovered_call_pages),
+        "fundingCallDraft": funding_call_draft,
         "discoveredAttachments": len(discovered_attachments),
         "attachmentScans": attachment_scans,
         "archivedDocument": archived_document,
