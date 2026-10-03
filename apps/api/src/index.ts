@@ -4917,3 +4917,22 @@ app.setErrorHandler((error, request, reply) => {
 
 const port = Number(process.env.PORT ?? 4000);
 await app.listen({ port, host: '0.0.0.0' });
+
+const smtpSmokeTestTo = process.env.SMTP_SMOKE_TEST_TO?.trim();
+if (smtpSmokeTestTo) {
+  void sendEmailVerificationCode(smtpSmokeTestTo, '123456')
+    .then(() => {
+      app.log.info(
+        { recipientDomain: smtpSmokeTestTo.split('@')[1] ?? 'unknown' },
+        'SMTP_SMOKE_TEST_OK'
+      );
+    })
+    .catch((error) => {
+      app.log.error(
+        {
+          smtpError: error instanceof Error ? error.message : String(error)
+        },
+        'SMTP_SMOKE_TEST_FAILED'
+      );
+    });
+}
