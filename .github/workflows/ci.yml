@@ -45,5 +45,5 @@ jobs:
       - run: python -m pip install --upgrade pip
       - run: pip install -r services/document-worker/requirements.txt
       - run: python -m compileall services/document-worker/app
-      - run: pytest -q
+      - run: PYTHONPATH=. pytest -q
         working-directory: services/document-worker
