@@ -3,6 +3,7 @@ import crypto from 'node:crypto';
 import cors from '@fastify/cors';
 import { z } from 'zod';
 import { prisma } from '@dotacjapro/db';
+import { qualifyPupStartup, QUALIFICATION_ENGINE_VERSION } from '@dotacjapro/rules';
 import { validateTelegramInitData } from './security/telegram.js';
 import { createSessionToken, verifySessionToken } from './security/session.js';
 import { VOIVODESHIPS } from './data/voivodeships.js';
@@ -380,6 +381,142 @@ app.post('/v1/cases', async (request, reply) => {
   });
 
   return reply.code(201).send({ case: item });
+});
+
+
+app.post('/v1/cases/:caseId/qualify', async (request, reply) => {
+  const userId = await requireUserId(request);
+  const caseId = (request.params as { caseId: string }).caseId;
+
+  const item = await prisma.case.findFirst({
+    where: { id: caseId, userId },
+    include: {
+      user: {
+        include: {
+          profile: true,
+          fundingProfile: true
+        }
+      }
+    }
+  });
+
+  if (!item) {
+    return reply.code(404).send({ error: 'CASE_NOT_FOUND' });
+  }
+
+  const profile = item.user.profile;
+  const funding = item.user.fundingProfile;
+
+  const pup = qualifyPupStartup({
+    employmentStatus: funding?.employmentStatus,
+    wantsToStartBusiness: funding?.wantsToStartBusiness,
+    voivodeship: profile?.voivodeship,
+    municipality: profile?.municipality,
+    regionVerified: profile?.regionVerified,
+    pupOfficeId: profile?.pupOfficeId,
+    businessActiveLast12Months: funding?.businessActiveLast12Months,
+    priorNonRepayableStartupAid: funding?.priorNonRepayableStartupAid
+  });
+
+  const activeCalls = profile?.pupOfficeId
+    ? await prisma.fundingCall.findMany({
+        where: {
+          institutionId: profile.pupOfficeId,
+          status: { in: ['OPEN', 'ANNOUNCED'] },
+          OR: [
+            { closesAt: null },
+            { closesAt: { gte: new Date() } }
+          ]
+        },
+        orderBy: [{ opensAt: 'asc' }, { closesAt: 'asc' }],
+        take: 20
+      })
+    : [];
+
+  const sourceRefs = [
+    ...pup.sourceRefs,
+    ...(profile?.regionSource
+      ? [{
+          sourceId: 'REGIONAL-PUP-ROUTING',
+          sourceVersionId: profile.regionSource,
+          url: profile.regionSource
+        }]
+      : []),
+    ...activeCalls
+      .filter((call) => call.officialUrl)
+      .map((call) => ({
+        sourceId: `FUNDING-CALL:${call.id}`,
+        sourceVersionId: call.verifiedAt?.toISOString() ?? 'UNVERIFIED',
+        url: call.officialUrl ?? undefined
+      }))
+  ];
+
+  const result = {
+    engineVersion: QUALIFICATION_ENGINE_VERSION,
+    generatedAt: new Date().toISOString(),
+    caseId,
+    paths: [{
+      ...pup,
+      activeCalls: activeCalls.map((call) => ({
+        id: call.id,
+        title: call.title,
+        status: call.status,
+        opensAt: call.opensAt,
+        closesAt: call.closesAt,
+        untilExhausted: call.untilExhausted,
+        officialUrl: call.officialUrl,
+        verifiedAt: call.verifiedAt
+      }))
+    }]
+  };
+
+  const snapshot = await prisma.qualificationSnapshot.create({
+    data: {
+      caseId,
+      status: pup.status,
+      engineVersion: QUALIFICATION_ENGINE_VERSION,
+      resultJson: result as never,
+      sourceRefs: sourceRefs as never
+    }
+  });
+
+  await prisma.auditEvent.create({
+    data: {
+      userId,
+      actorType: 'SYSTEM',
+      action: 'CASE_QUALIFIED',
+      entity: 'QualificationSnapshot',
+      entityId: snapshot.id,
+      metadata: {
+        caseId,
+        engineVersion: QUALIFICATION_ENGINE_VERSION,
+        primaryStatus: pup.status
+      }
+    }
+  });
+
+  return {
+    snapshotId: snapshot.id,
+    ...result
+  };
+});
+
+app.get('/v1/cases/:caseId/qualification/latest', async (request, reply) => {
+  const userId = await requireUserId(request);
+  const caseId = (request.params as { caseId: string }).caseId;
+
+  const item = await prisma.case.findFirst({
+    where: { id: caseId, userId },
+    select: { id: true }
+  });
+  if (!item) return reply.code(404).send({ error: 'CASE_NOT_FOUND' });
+
+  const snapshot = await prisma.qualificationSnapshot.findFirst({
+    where: { caseId },
+    orderBy: { createdAt: 'desc' }
+  });
+
+  return { snapshot };
 });
 
 app.get('/v1/me/dashboard', async (request) => {
