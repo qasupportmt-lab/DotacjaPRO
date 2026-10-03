@@ -5,6 +5,7 @@ from datetime import datetime, timezone
 
 import httpx
 
+from .criteria import analyze_criteria_document
 from .funding_call import analyze_funding_call_page, discover_call_pages
 from .official_attachments import discover_official_attachments
 from .pup_directory import parse_pup_directory
@@ -27,6 +28,45 @@ def worker_headers() -> dict[str, str]:
         raise RuntimeError("INTERNAL_WORKER_SECRET is required")
     return {"x-worker-secret": WORKER_SECRET}
 
+
+
+
+async def upsert_criteria_draft(
+    client: httpx.AsyncClient,
+    source: dict,
+    response: httpx.Response,
+    archived_document: dict,
+) -> dict:
+    proposal = analyze_criteria_document(
+        source=response.content,
+        original_name=source.get("displayName")
+        or source["canonicalUrl"].rstrip("/").split("/")[-1]
+        or "kryteria.pdf",
+        mime_type=response.headers.get("content-type", "application/octet-stream")
+        .split(";")[0]
+        .strip(),
+    )
+
+    payload = {
+        "sourceDocumentId": archived_document["documentId"],
+        "title": proposal["title"],
+        "blockingRulesJson": proposal["blockingRulesJson"],
+        "analysisJson": proposal["analysisJson"],
+        "criteria": proposal["criteria"],
+    }
+
+    if proposal.get("minimumPoints") is not None:
+        payload["minimumPoints"] = proposal["minimumPoints"]
+    if proposal.get("maximumPoints") is not None:
+        payload["maximumPoints"] = proposal["maximumPoints"]
+
+    result = await client.post(
+        f"{API_BASE_URL}/v1/internal/criterion-sets/upsert-draft",
+        headers={**worker_headers(), "Content-Type": "application/json"},
+        json=payload,
+    )
+    result.raise_for_status()
+    return result.json()
 
 
 async def import_call_pages(
@@ -286,6 +326,19 @@ async def scan_source(client: httpx.AsyncClient, source: dict) -> dict:
             digest,
         )
 
+    criteria_draft = None
+    if (
+        source.get("kind") == "CRITERIA"
+        and archived_document is not None
+        and response.status_code != 304
+    ):
+        criteria_draft = await upsert_criteria_draft(
+            client,
+            source,
+            response,
+            archived_document,
+        )
+
     return {
         "sourceId": source["id"],
         "url": source["canonicalUrl"],
@@ -296,6 +349,7 @@ async def scan_source(client: httpx.AsyncClient, source: dict) -> dict:
         "discoveredAttachments": len(discovered_attachments),
         "attachmentScans": attachment_scans,
         "archivedDocument": archived_document,
+        "criteriaDraft": criteria_draft,
         **result,
     }
 
