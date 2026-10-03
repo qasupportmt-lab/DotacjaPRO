@@ -114,6 +114,7 @@ export default function Home() {
   const [description, setDescription] = useState('');
   const [caseId, setCaseId] = useState<string | null>(null);
   const [qualification, setQualification] = useState<QualificationView | null>(null);
+  const [selectedFundingCallId, setSelectedFundingCallId] = useState<string | null>(null);
   const [selectedCriterionSetId, setSelectedCriterionSetId] = useState<string | null>(null);
   const [criterionQuestions, setCriterionQuestions] = useState<CriterionQuestion[]>([]);
   const [criterionAnswers, setCriterionAnswers] = useState<Record<string, string | number | boolean | null>>({});
@@ -361,6 +362,61 @@ export default function Home() {
     }
   }
 
+
+  async function selectFundingCall(call: ActiveCall) {
+    if (!caseId || !token) return;
+    setBusy(true);
+    setError(null);
+
+    try {
+      const res = await fetch(
+        `${API}/v1/cases/${caseId}/select-call`,
+        {
+          method: 'POST',
+          headers: authHeaders,
+          body: JSON.stringify({ fundingCallId: call.id })
+        }
+      );
+
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        if (data.error === 'CASE_CALL_LOCKED_BY_DOCUMENTS') {
+          throw new Error('Nie można zmienić naboru po rozpoczęciu generowania dokumentów.');
+        }
+        if (data.error === 'FUNDING_CALL_NOT_AVAILABLE_FOR_CASE') {
+          throw new Error('Ten nabór nie jest już dostępny dla tej sprawy.');
+        }
+        throw new Error('Nie udało się wybrać naboru.');
+      }
+
+      setSelectedFundingCallId(call.id);
+      setSelectedCriterionSetId(null);
+      setCriterionQuestions([]);
+      setCriterionAnswers({});
+      setCriterionAssessment(null);
+
+      if (call.localCriteria) {
+        const params = new URLSearchParams({
+          criterionSetId: call.localCriteria.id
+        });
+        const criteriaResponse = await fetch(
+          `${API}/v1/cases/${caseId}/local-criteria?${params.toString()}`,
+          { headers: authHeaders }
+        );
+
+        if (criteriaResponse.ok) {
+          const data = await criteriaResponse.json();
+          setSelectedCriterionSetId(call.localCriteria.id);
+          setCriterionQuestions(data.questions ?? []);
+          setCriterionAnswers({});
+        }
+      }
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Błąd wyboru naboru');
+    } finally {
+      setBusy(false);
+    }
+  }
 
   async function loadCriteria(criterionSetId: string) {
     if (!caseId || !token) return;
@@ -634,7 +690,21 @@ export default function Home() {
                       </a>
                     )}
 
-                    {call.localCriteria ? (
+                    <button
+                      className={selectedFundingCallId === call.id ? 'secondary' : ''}
+                      onClick={() => selectFundingCall(call)}
+                      disabled={busy || selectedFundingCallId === call.id}
+                    >
+                      {selectedFundingCallId === call.id
+                        ? 'Wybrany nabór ✓'
+                        : 'Wybierz ten nabór'}
+                    </button>
+
+                    {selectedFundingCallId !== call.id ? (
+                      <p className="muted-box">
+                        Wybierz ten nabór, aby uruchomić jego kryteria i właściwe dokumenty.
+                      </p>
+                    ) : call.localCriteria ? (
                       <div className="criteria-panel">
                         <h3>Kryteria punktowe</h3>
                         <p>
@@ -841,7 +911,7 @@ export default function Home() {
                       </div>
                     ) : (
                       <p className="muted-box">
-                        Nabór jest zweryfikowany, ale nie ma jeszcze zweryfikowanego zestawu kryteriów punktowych.
+                        Ten nabór jest wybrany, ale nie ma jeszcze zweryfikowanego zestawu kryteriów punktowych.
                       </p>
                     )}
                   </section>
