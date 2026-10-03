@@ -90,6 +90,14 @@ type OfficialForm = {
   sha256: string;
   officialSourceUrl: string;
   officialSourceName: string | null;
+  requiredForPackage: boolean;
+  latestRender: {
+    id: string;
+    status: string;
+    outputName: string | null;
+    errorCode: string | null;
+    completedAt: string | null;
+  } | null;
 };
 
 type FormQuestion = {
@@ -109,6 +117,14 @@ type RenderJobView = {
   outputName: string | null;
   errorCode: string | null;
 };
+
+type PackageJobView = {
+  id: string;
+  status: string;
+  outputName: string | null;
+  errorCode: string | null;
+};
+
 
 const API = process.env.NEXT_PUBLIC_API_BASE_URL ?? 'http://localhost:4000';
 
@@ -154,6 +170,8 @@ export default function Home() {
   const [formQuestions, setFormQuestions] = useState<FormQuestion[]>([]);
   const [formAnswers, setFormAnswers] = useState<Record<string, unknown>>({});
   const [renderJob, setRenderJob] = useState<RenderJobView | null>(null);
+  const [packageJob, setPackageJob] = useState<PackageJobView | null>(null);
+  const [packageMessage, setPackageMessage] = useState<string | null>(null);
 
   const authHeaders = useMemo(
     () => token ? { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' } : undefined,
@@ -207,6 +225,10 @@ export default function Home() {
           outputName: data.job.outputName ?? null,
           errorCode: data.job.errorCode ?? null
         });
+
+        if (data.job.status === 'COMPLETED') {
+          void loadOfficialForms();
+        }
       } catch {
         // Status można odświeżyć przy kolejnym cyklu.
       }
@@ -214,6 +236,42 @@ export default function Home() {
 
     return () => window.clearInterval(timer);
   }, [caseId, renderJob?.id, renderJob?.status, authHeaders]);
+
+  useEffect(() => {
+    if (
+      !caseId ||
+      !packageJob ||
+      !['QUEUED', 'PROCESSING'].includes(packageJob.status)
+    ) {
+      return;
+    }
+
+    const timer = window.setInterval(async () => {
+      try {
+        const res = await fetch(
+          `${API}/v1/cases/${caseId}/package/${packageJob.id}`,
+          { headers: authHeaders }
+        );
+        if (!res.ok) return;
+
+        const data = await res.json();
+        setPackageJob({
+          id: data.job.id,
+          status: data.job.status,
+          outputName: data.job.outputName ?? null,
+          errorCode: data.job.errorCode ?? null
+        });
+
+        if (data.job.status === 'COMPLETED') {
+          setPackageMessage('Komplet został przygotowany i wysłany na zweryfikowany adres e-mail.');
+        }
+      } catch {
+        // Kolejny cykl odświeży stan.
+      }
+    }, 2500);
+
+    return () => window.clearInterval(timer);
+  }, [caseId, packageJob?.id, packageJob?.status, authHeaders]);
 
   useEffect(() => {
     if (step !== 'region' || !region.voivodeship || region.city.trim().length < 2) {
@@ -559,6 +617,64 @@ export default function Home() {
     }
   }
 
+  async function requestFinalPackage() {
+    if (!caseId || !token) return;
+    setBusy(true);
+    setError(null);
+    setPackageMessage(null);
+
+    try {
+      const res = await fetch(
+        `${API}/v1/cases/${caseId}/package`,
+        {
+          method: 'POST',
+          headers: authHeaders
+        }
+      );
+
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+
+        if (data.error === 'PACKAGE_REQUIRED_DOCUMENTS_MISSING') {
+          const names = (data.missing ?? [])
+            .map((item: { name?: string }) => item.name)
+            .filter(Boolean)
+            .join(', ');
+          throw new Error(
+            names
+              ? `Najpierw przygotuj wymagane dokumenty: ${names}`
+              : 'Najpierw przygotuj wszystkie wymagane formularze.'
+          );
+        }
+
+        if (data.error === 'VERIFIED_SUBMISSION_INSTRUCTION_REQUIRED') {
+          throw new Error(
+            'Instrukcja złożenia dla tego naboru nie została jeszcze zweryfikowana. Pakiet nie zostanie wysłany z niesprawdzonymi instrukcjami.'
+          );
+        }
+
+        if (data.error === 'NO_VERIFIED_REQUIRED_FORMS') {
+          throw new Error('Brak zweryfikowanego kompletu wymaganych formularzy.');
+        }
+
+        throw new Error('Nie udało się zlecić wysyłki pakietu.');
+      }
+
+      const data = await res.json();
+      setPackageJob({
+        id: data.job.id,
+        status: data.job.status,
+        outputName: data.job.outputName ?? null,
+        errorCode: data.job.errorCode ?? null
+      });
+      setPackageMessage('Pakiet został przekazany do przygotowania.');
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Błąd wysyłki pakietu');
+    } finally {
+      setBusy(false);
+    }
+  }
+
   async function selectFundingCall(call: ActiveCall) {
     if (!caseId || !token) return;
     setBusy(true);
@@ -595,6 +711,8 @@ export default function Home() {
       setFormQuestions([]);
       setFormAnswers({});
       setRenderJob(null);
+      setPackageJob(null);
+      setPackageMessage(null);
 
       await loadOfficialForms();
 
@@ -1135,7 +1253,14 @@ export default function Home() {
                                   Oryginał: {form.originalName}
                                   {' · '}
                                   wersja {form.versionLabel ?? form.sha256.slice(0, 12)}
+                                  {form.requiredForPackage ? ' · wymagany do paczki' : ' · opcjonalny'}
                                 </p>
+                                {form.latestRender && (
+                                  <p className={form.latestRender.status === 'COMPLETED' ? 'verified' : 'call-meta'}>
+                                    Ostatni status: {form.latestRender.status}
+                                    {form.latestRender.outputName ? ` · ${form.latestRender.outputName}` : ''}
+                                  </p>
+                                )}
                                 <a
                                   className="source-link"
                                   href={form.officialSourceUrl}
@@ -1249,6 +1374,36 @@ export default function Home() {
                               </div>
                             ))}
                           </div>
+                        )}
+                      </div>
+
+                      <div className="package-panel">
+                        <h3>Gotowy komplet</h3>
+                        <p>
+                          DotacjaPRO wyśle ZIP z wymaganymi formularzami, instrukcją do wydruku
+                          i manifestem wersji dokumentów na Twój zweryfikowany e-mail.
+                        </p>
+                        <button
+                          onClick={requestFinalPackage}
+                          disabled={
+                            busy ||
+                            !!packageJob && ['QUEUED', 'PROCESSING'].includes(packageJob.status)
+                          }
+                        >
+                          {packageJob && ['QUEUED', 'PROCESSING'].includes(packageJob.status)
+                            ? 'Przygotowywanie pakietu…'
+                            : 'Wyślij kompletny pakiet na e-mail'}
+                        </button>
+                        {packageMessage && <p className="verified">{packageMessage}</p>}
+                        {packageJob?.status === 'COMPLETED' && (
+                          <p className="verified">
+                            ✓ Pakiet wysłany: {packageJob.outputName ?? 'komplet dokumentów'}
+                          </p>
+                        )}
+                        {packageJob?.status === 'FAILED' && (
+                          <p className="error">
+                            Wysyłka pakietu nie powiodła się ({packageJob.errorCode ?? 'PACKAGE_DELIVERY_FAILED'}).
+                          </p>
                         )}
                       </div>
                     )}
