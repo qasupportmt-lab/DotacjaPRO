@@ -19,6 +19,11 @@ import {
 } from './email/mailer.js';
 import { generateEmailCode, hashEmailCode, emailCodeMatches } from './security/email-code.js';
 import { hashPassword, passwordMatches } from './security/password.js';
+import {
+  LEGAL_STATEMENTS,
+  LEGAL_STATEMENTS_SHA256,
+  LEGAL_VERSION
+} from './legal/policy.js';
 
 const app = Fastify({ logger: true, bodyLimit: 35 * 1024 * 1024 });
 
@@ -297,6 +302,90 @@ app.get('/v1/system/policy', async () => ({
   legal_snapshot_required: true,
   source_verification_required: true
 }));
+
+app.get('/v1/legal/current', async () => ({
+  version: LEGAL_VERSION,
+  sha256: LEGAL_STATEMENTS_SHA256,
+  statements: LEGAL_STATEMENTS,
+  seller: {
+    name: process.env.LEGAL_SELLER_NAME ?? null,
+    address: process.env.LEGAL_SELLER_ADDRESS ?? null,
+    email: process.env.LEGAL_SELLER_EMAIL ?? process.env.EMAIL_FROM ?? null,
+    nip: process.env.LEGAL_SELLER_NIP ?? null
+  }
+}));
+
+const legalAcceptanceSchema = z.object({
+  version: z.literal(LEGAL_VERSION),
+  termsAccepted: z.literal(true),
+  licenseAccepted: z.literal(true),
+  privacyAcknowledged: z.literal(true),
+  digitalImmediateConsent: z.boolean().default(false),
+  withdrawalAcknowledged: z.boolean().default(false),
+  context: z.enum(['CHECKOUT', 'ACCOUNT', 'PACKAGE']).default('CHECKOUT'),
+  purchaseReference: z.string().trim().min(1).max(200).optional()
+});
+
+app.post('/v1/me/legal-acceptances', async (request, reply) => {
+  const userId = await requireUserId(request);
+  const parsed = legalAcceptanceSchema.safeParse(request.body);
+
+  if (!parsed.success) {
+    return reply.code(400).send({
+      error: 'INVALID_LEGAL_ACCEPTANCE',
+      details: parsed.error.flatten()
+    });
+  }
+
+  if (
+    parsed.data.context === 'CHECKOUT' &&
+    (!parsed.data.digitalImmediateConsent || !parsed.data.withdrawalAcknowledged)
+  ) {
+    return reply.code(400).send({
+      error: 'DIGITAL_CONTENT_CONSENT_REQUIRED'
+    });
+  }
+
+  const event = await prisma.auditEvent.create({
+    data: {
+      userId,
+      actorType: 'USER',
+      action: 'LEGAL_ACCEPTANCE',
+      entity: 'LEGAL_TERMS',
+      entityId: LEGAL_VERSION,
+      metadata: {
+        legalVersion: LEGAL_VERSION,
+        legalStatementsSha256: LEGAL_STATEMENTS_SHA256,
+        context: parsed.data.context,
+        purchaseReference: parsed.data.purchaseReference ?? null,
+        termsAccepted: parsed.data.termsAccepted,
+        licenseAccepted: parsed.data.licenseAccepted,
+        privacyAcknowledged: parsed.data.privacyAcknowledged,
+        digitalImmediateConsent: parsed.data.digitalImmediateConsent,
+        withdrawalAcknowledged: parsed.data.withdrawalAcknowledged,
+        acceptedStatementIds: [
+          'terms',
+          'license',
+          'privacy',
+          ...(parsed.data.digitalImmediateConsent ? ['digitalImmediate'] : []),
+          ...(parsed.data.withdrawalAcknowledged ? ['withdrawalAcknowledgement'] : [])
+        ]
+      }
+    },
+    select: {
+      id: true,
+      createdAt: true
+    }
+  });
+
+  return {
+    status: 'RECORDED',
+    legalVersion: LEGAL_VERSION,
+    legalStatementsSha256: LEGAL_STATEMENTS_SHA256,
+    acceptedAt: event.createdAt,
+    acceptanceId: event.id
+  };
+});
 
 app.get('/v1/metadata/voivodeships', async () => ({
   items: VOIVODESHIPS
