@@ -87,3 +87,10 @@ button:disabled { opacity: .45; cursor: default; }
 .form-questions { margin-top: 12px; }
 .render-state, .package-panel { border-radius: 14px; }
 .render-state { margin-top: 12px; padding: 12px; border: 1px solid var(--line); background: rgba(126,242,167,.035); }
+
+
+.auth-tabs { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin: 16px 0 4px; }
+.auth-tabs button { margin-top: 0; }
+.auth-divider { display: flex; align-items: center; gap: 12px; margin: 18px 0 4px; color: var(--muted); font-size: 12px; }
+.auth-divider::before, .auth-divider::after { content: ''; flex: 1; height: 1px; background: var(--line); }
+.auth-note { margin: 14px 0 0; font-size: 12px; }
