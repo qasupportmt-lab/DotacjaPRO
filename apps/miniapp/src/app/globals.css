@@ -39,3 +39,26 @@ button:disabled { opacity: .45; cursor: default; }
 .secondary { background: transparent; color: var(--text); border: 1px solid var(--line); }
 
 .qualification-status { display: inline-block; margin: 12px 0 4px; padding: 7px 10px; border: 1px solid var(--line); border-radius: 999px; color: var(--accent); font-size: 12px; font-weight: 850; letter-spacing: .04em; }
+
+.funding-list { display: grid; gap: 16px; margin-top: 22px; }
+.funding-call { border: 1px solid var(--line); background: rgba(255,255,255,.02); border-radius: 18px; padding: 17px; }
+.funding-call-head { display: flex; flex-direction: column; gap: 8px; }
+.funding-call-head h3 { margin: 0; font-size: 18px; line-height: 1.25; }
+.call-state { width: fit-content; border-radius: 999px; border: 1px solid var(--accent); color: var(--accent); padding: 5px 8px; font-size: 11px; font-weight: 850; letter-spacing: .05em; }
+.call-meta { margin: 10px 0; font-size: 13px; }
+.source-link { display: inline-block; color: var(--accent); font-size: 13px; font-weight: 750; margin: 4px 0 10px; text-decoration: none; }
+.criteria-panel { margin-top: 18px; padding-top: 16px; border-top: 1px solid var(--line); }
+.criteria-panel > h3 { margin: 0 0 6px; font-size: 18px; }
+.criteria-list { display: grid; gap: 10px; margin: 14px 0; }
+.criterion { border: 1px solid var(--line); border-radius: 14px; padding: 13px; background: var(--panel-2); }
+.criterion-title { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; }
+.criterion-title strong { font-size: 14px; line-height: 1.35; }
+.criterion-title span { flex: 0 0 auto; color: var(--accent); font-size: 11px; font-weight: 800; }
+.criterion p { margin: 8px 0 0; font-size: 12px; }
+.manual-review { color: var(--muted); border-left: 2px solid var(--line); padding-left: 9px; }
+.warning { color: #ffd49a !important; }
+.assessment { margin-top: 14px; border: 1px solid var(--line); border-radius: 15px; padding: 14px; background: rgba(126,242,167,.035); }
+.assessment h3 { margin: 9px 0 3px; font-size: 28px; }
+.assessment p { font-size: 13px; margin: 7px 0; }
+.assessment-note { padding-top: 9px; border-top: 1px solid var(--line); font-size: 11px !important; }
+.muted-box { margin-top: 14px; border: 1px dashed var(--line); border-radius: 13px; padding: 12px; font-size: 12px; }
