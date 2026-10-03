@@ -1,5 +1,5 @@
 import http from 'node:http';
-import { Bot, InlineKeyboard, type Update } from 'grammy';
+import { Bot, InlineKeyboard } from 'grammy';
 
 const token = process.env.TELEGRAM_BOT_TOKEN;
 if (!token) throw new Error('TELEGRAM_BOT_TOKEN is required');
@@ -26,6 +26,32 @@ bot.command('dotacje', async (ctx) => {
   await ctx.reply(
     'Otwórz DotacjaPRO, aby sprawdzić programy dopasowane do Twojego regionu i sytuacji.',
     { reply_markup: keyboard }
+  );
+});
+
+bot.command('whoami', async (ctx) => {
+  await ctx.reply(
+    [
+      'Twój identyfikator Telegram:',
+      `<code>${ctx.from?.id ?? 'brak'}</code>`,
+      '',
+      'Administrator DotacjaPRO może dodać ten numer do ADMIN_TELEGRAM_USER_IDS.'
+    ].join('\n'),
+    { parse_mode: 'HTML' }
+  );
+});
+
+bot.command('help', async (ctx) => {
+  const keyboard = new InlineKeyboard().webApp('Otwórz DotacjaPRO', appBaseUrl);
+  await ctx.reply(
+    [
+      '<b>DotacjaPRO</b>',
+      '/start — otwórz aplikację',
+      '/dotacje — sprawdź dostępne finansowanie',
+      '/whoami — pokaż Twój Telegram ID',
+      '/help — lista poleceń'
+    ].join('\n'),
+    { parse_mode: 'HTML', reply_markup: keyboard }
   );
 });
 
@@ -181,7 +207,7 @@ const server = http.createServer(async (request, response) => {
         });
       }
 
-      const update = await readJsonBody(request) as Update;
+      const update = await readJsonBody(request) as Parameters<typeof bot.handleUpdate>[0];
       await bot.handleUpdate(update);
       return json(response, 200, { ok: true });
     }
