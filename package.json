@@ -7,7 +7,10 @@
     "dev": "turbo dev",
     "build": "turbo build",
     "lint": "turbo lint",
-    "typecheck": "turbo typecheck"
+    "typecheck": "turbo typecheck",
+    "start:api": "pnpm --filter @dotacjapro/db db:generate && pnpm --filter @dotacjapro/api exec tsx src/index.ts",
+    "start:bot": "pnpm --filter @dotacjapro/bot exec tsx src/index.ts",
+    "generate:db": "pnpm --filter @dotacjapro/db db:generate"
   },
   "devDependencies": {
     "turbo": "^2.5.8",
