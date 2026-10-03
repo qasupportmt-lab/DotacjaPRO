@@ -303,17 +303,34 @@ app.get('/v1/system/policy', async () => ({
   source_verification_required: true
 }));
 
-app.get('/v1/legal/current', async () => ({
-  version: LEGAL_VERSION,
-  sha256: LEGAL_STATEMENTS_SHA256,
-  statements: LEGAL_STATEMENTS,
-  seller: {
+app.get('/v1/legal/current', async () => {
+  const seller = {
+    brand: process.env.LEGAL_BRAND_NAME ?? 'DotacjaPRO Bot',
     name: process.env.LEGAL_SELLER_NAME ?? null,
     address: process.env.LEGAL_SELLER_ADDRESS ?? null,
     email: process.env.LEGAL_SELLER_EMAIL ?? process.env.EMAIL_FROM ?? null,
     nip: process.env.LEGAL_SELLER_NIP ?? null
-  }
-}));
+  };
+
+  const legalIdentityComplete = Boolean(
+    seller.name &&
+    seller.address &&
+    seller.email &&
+    seller.nip
+  );
+
+  return {
+    version: LEGAL_VERSION,
+    sha256: LEGAL_STATEMENTS_SHA256,
+    statements: LEGAL_STATEMENTS,
+    seller,
+    legalIdentityComplete,
+    checkoutAllowed: legalIdentityComplete,
+    checkoutBlockedReason: legalIdentityComplete
+      ? null
+      : 'LEGAL_SELLER_IDENTITY_INCOMPLETE'
+  };
+});
 
 const legalAcceptanceSchema = z.object({
   version: z.literal(LEGAL_VERSION),

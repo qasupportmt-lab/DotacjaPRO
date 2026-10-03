@@ -111,3 +111,18 @@ API zapisuje w AuditEvent:
 - czas utworzenia AuditEvent.
 
 Nie zapisujemy IP tylko po to, by „mieć więcej dowodów”, jeśli nie jest to potrzebne.
+
+
+## Marka a administrator danych / sprzedawca
+
+Nazwa widoczna dla użytkownika może brzmieć „DotacjaPRO Bot”.
+
+Nie należy jednak utożsamiać marki lub oprogramowania z administratorem danych albo stroną umowy, jeżeli nie jest ono samodzielnym podmiotem zdolnym wykonywać tych obowiązków. W API checkout pozostaje zablokowany (checkoutAllowed=false), dopóki nie zostaną skonfigurowane rzeczywiste dane operatora prawnego.
+
+Minimalne wymagane dane operatora:
+- LEGAL_SELLER_NAME
+- LEGAL_SELLER_ADDRESS
+- LEGAL_SELLER_EMAIL
+- LEGAL_SELLER_NIP
+
+LEGAL_BRAND_NAME może pozostać „DotacjaPRO Bot”.

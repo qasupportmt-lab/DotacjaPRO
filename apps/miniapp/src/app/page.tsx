@@ -1987,6 +1987,11 @@ export default function Home() {
 
         {error && <p className="error">{error}</p>}
       </section>
+
+      <footer className="legal-footer">
+        <span>DotacjaPRO Bot</span>
+        <a href="/legal">Regulamin · Licencja · RODO</a>
+      </footer>
     </main>
   );
 }

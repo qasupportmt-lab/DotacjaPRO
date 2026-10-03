@@ -7,24 +7,41 @@ LEGAL_VERSION = "2026-10-03.1"
 
 def _seller_details() -> dict[str, str]:
     return {
-        "name": os.getenv("LEGAL_SELLER_NAME", "Sprzedawca wskazany w potwierdzeniu zakupu"),
-        "address": os.getenv("LEGAL_SELLER_ADDRESS", "Adres wskazany w potwierdzeniu zakupu"),
+        "brand": os.getenv("LEGAL_BRAND_NAME", "DotacjaPRO Bot"),
+        "name": os.getenv("LEGAL_SELLER_NAME", ""),
+        "address": os.getenv("LEGAL_SELLER_ADDRESS", ""),
         "email": os.getenv("LEGAL_SELLER_EMAIL", "qasupportmt@gmail.com"),
         "nip": os.getenv("LEGAL_SELLER_NIP", ""),
     }
 
 
+def legal_identity_complete() -> bool:
+    seller = _seller_details()
+    return bool(
+        seller["name"]
+        and seller["address"]
+        and seller["email"]
+        and seller["nip"]
+    )
+
+
 def legal_pack_text() -> str:
     seller = _seller_details()
     nip_line = f"NIP: {seller['nip']}\n" if seller["nip"] else ""
+    legal_identity = (
+        f"{seller['name']}\n{seller['address']}\n{nip_line}"
+        if legal_identity_complete()
+        else "Dane podmiotu prawnego nie zostały jeszcze skonfigurowane — sprzedaż konsumencka powinna pozostać wyłączona.\n"
+    )
 
     return f"""DOTACJAPRO — WARUNKI KORZYSTANIA, LICENCJA, INFORMACJA PRAWNA I RODO
 Wersja: {LEGAL_VERSION}
 
-SPRZEDAWCA / ADMINISTRATOR
-{seller['name']}
-{seller['address']}
-{nip_line}Kontakt: {seller['email']}
+MARKA / USŁUGA
+{seller['brand']}
+
+SPRZEDAWCA / ADMINISTRATOR DANYCH
+{legal_identity}Kontakt: {seller['email']}
 
 1. CHARAKTER MATERIAŁÓW
 Autorskie komentarze, checklisty, przykłady, wzory, instrukcje i materiały szkoleniowe DotacjaPRO mają charakter informacyjny i edukacyjny. Nie stanowią indywidualnej porady prawnej, podatkowej, księgowej, inwestycyjnej ani decyzji organu administracji.

@@ -98,3 +98,12 @@ button:disabled { opacity: .45; cursor: default; }
 .session-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin: 0 0 14px; padding: 10px 12px; border: 1px solid var(--line); border-radius: 14px; background: rgba(255,255,255,.02); }
 .session-toolbar span { color: var(--muted); font-size: 12px; font-weight: 700; }
 .session-toolbar .compact { margin: 0; }
+
+.legal-footer { display: flex; justify-content: space-between; gap: 12px; align-items: center; margin-top: 18px; padding: 12px 4px; color: var(--muted); font-size: 12px; }
+.legal-footer a { color: var(--accent); text-decoration: none; font-weight: 750; }
+.legal-page h2 { margin-top: 26px; }
+.legal-page strong { color: var(--text); }
+.legal-warning { margin: 18px 0; padding: 14px; border: 1px solid rgba(255,212,154,.34); border-radius: 14px; background: rgba(255,212,154,.05); }
+.legal-warning strong { color: #ffd49a; }
+.legal-warning p { margin-bottom: 0; }
+.legal-version { margin-top: 28px; padding-top: 14px; border-top: 1px solid var(--line); font-size: 11px; word-break: break-all; }
