@@ -21,7 +21,7 @@ const VOIVODESHIPS = [
   'świętokrzyskie','warmińsko-mazurskie','wielkopolskie','zachodniopomorskie'
 ];
 
-type Step = 'welcome' | 'region' | 'employment' | 'business' | 'done';
+type Step = 'welcome' | 'region' | 'email' | 'employment' | 'business' | 'done';
 
 const API = process.env.NEXT_PUBLIC_API_BASE_URL ?? 'http://localhost:4000';
 
@@ -37,6 +37,9 @@ export default function Home() {
     county: '',
     postalCode: ''
   });
+  const [email, setEmail] = useState('');
+  const [emailCode, setEmailCode] = useState('');
+  const [emailCodeSent, setEmailCodeSent] = useState(false);
   const [employmentStatus, setEmploymentStatus] = useState('UNEMPLOYED_REGISTERED');
   const [description, setDescription] = useState('');
 
@@ -51,24 +54,45 @@ export default function Home() {
     webApp?.expand();
   }, []);
 
+  async function saveTelegramWriteAccess(sessionToken: string, granted: boolean) {
+    try {
+      await fetch(`${API}/v1/me/notifications`, {
+        method: 'PUT',
+        headers: {
+          Authorization: `Bearer ${sessionToken}`,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({ telegramWriteAccess: granted })
+      });
+    } catch {
+      // Brak zgody nie blokuje onboardingu.
+    }
+  }
+
   async function authenticate() {
     setBusy(true);
     setError(null);
     try {
       const initData = window.Telegram?.WebApp?.initData;
-      if (!initData) {
-        throw new Error('Otwórz aplikację z poziomu @DotacjaPRO_bot.');
-      }
+      if (!initData) throw new Error('Otwórz aplikację z poziomu @DotacjaPRO_bot.');
+
       const res = await fetch(`${API}/v1/auth/telegram`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ initData })
       });
       if (!res.ok) throw new Error('Nie udało się zalogować przez Telegram.');
+
       const data = await res.json();
       setToken(data.token);
       setStep('region');
-      window.Telegram?.WebApp?.requestWriteAccess?.();
+
+      const requestWriteAccess = window.Telegram?.WebApp?.requestWriteAccess;
+      if (requestWriteAccess) {
+        requestWriteAccess((granted) => {
+          void saveTelegramWriteAccess(data.token, granted);
+        });
+      }
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Błąd logowania');
     } finally {
@@ -95,9 +119,57 @@ export default function Home() {
         body: JSON.stringify(body)
       });
       if (!res.ok) throw new Error('Nie udało się zapisać regionu.');
-      setStep('employment');
+      setStep('email');
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Błąd zapisu');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function sendEmailCode() {
+    if (!token || !email) return;
+    setBusy(true);
+    setError(null);
+    try {
+      const res = await fetch(`${API}/v1/me/email/start`, {
+        method: 'POST',
+        headers: authHeaders,
+        body: JSON.stringify({ email })
+      });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        if (data.error === 'EMAIL_ALREADY_IN_USE') throw new Error('Ten adres e-mail jest już przypisany do innego konta.');
+        if (data.error === 'EMAIL_DELIVERY_FAILED') throw new Error('Nie udało się wysłać kodu. Spróbuj ponownie za chwilę.');
+        throw new Error('Nie udało się wysłać kodu.');
+      }
+      setEmailCodeSent(true);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Błąd wysyłki');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function confirmEmailCode() {
+    if (!token || !email || emailCode.length !== 6) return;
+    setBusy(true);
+    setError(null);
+    try {
+      const res = await fetch(`${API}/v1/me/email/confirm`, {
+        method: 'POST',
+        headers: authHeaders,
+        body: JSON.stringify({ email, code: emailCode })
+      });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        if (data.error === 'CODE_EXPIRED') throw new Error('Kod wygasł. Wyślij nowy.');
+        if (data.error === 'TOO_MANY_ATTEMPTS') throw new Error('Za dużo prób. Wyślij nowy kod.');
+        throw new Error('Kod jest nieprawidłowy.');
+      }
+      setStep('employment');
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Błąd weryfikacji');
     } finally {
       setBusy(false);
     }
@@ -146,25 +218,31 @@ export default function Home() {
     }
   }
 
+  const progressed = {
+    welcome: 0,
+    region: 1,
+    email: 2,
+    employment: 3,
+    business: 4,
+    done: 5
+  }[step];
+
   return (
     <main className="shell">
       <section className="brand">
         <span className="eyebrow">DOTACJAPRO</span>
         <h1>Twoja droga do finansowania firmy</h1>
-        <p>Najpierw ustalimy Twój region i sytuację. Później dopasujemy programy i będziemy pracować wyłącznie na aktualnych, oficjalnych formularzach.</p>
+        <p>Ustalimy Twój region i sytuację, dopasujemy programy, a dokumenty przygotujemy wyłącznie na aktualnych, oficjalnych formularzach.</p>
       </section>
 
       <section className="card">
         <div className="progress">
-          <span className={step !== 'welcome' ? 'active' : ''}></span>
-          <span className={['employment','business','done'].includes(step) ? 'active' : ''}></span>
-          <span className={['business','done'].includes(step) ? 'active' : ''}></span>
-          <span className={step === 'done' ? 'active' : ''}></span>
+          {[1,2,3,4,5].map((n) => <span key={n} className={progressed >= n ? 'active' : ''}></span>)}
         </div>
 
         {step === 'welcome' && <>
           <h2>Zaczynamy</h2>
-          <p>Logowanie odbywa się przez Telegram. Nie tworzymy dodatkowego hasła.</p>
+          <p>Logowanie odbywa się przez Telegram. Nie tworzysz dodatkowego hasła.</p>
           <button onClick={authenticate} disabled={busy}>{busy ? 'Łączenie…' : 'Rozpocznij'}</button>
         </>}
 
@@ -179,6 +257,19 @@ export default function Home() {
           <label>Powiat <small>opcjonalnie</small><input value={region.county} onChange={e => setRegion({...region, county:e.target.value})} /></label>
           <label>Kod pocztowy <small>opcjonalnie</small><input value={region.postalCode} onChange={e => setRegion({...region, postalCode:e.target.value})} placeholder="00-000" /></label>
           <button onClick={saveRegion} disabled={busy || !region.voivodeship || region.city.length < 2}>Dalej</button>
+        </>}
+
+        {step === 'email' && <>
+          <h2>Potwierdź e-mail</h2>
+          <p>Na ten adres wyślemy gotowy komplet dokumentów i instrukcję złożenia.</p>
+          <label>Adres e-mail<input type="email" autoComplete="email" value={email} onChange={e => setEmail(e.target.value)} placeholder="twoj@email.pl" disabled={emailCodeSent} /></label>
+          {!emailCodeSent ? (
+            <button onClick={sendEmailCode} disabled={busy || !email.includes('@')}>{busy ? 'Wysyłanie…' : 'Wyślij kod'}</button>
+          ) : <>
+            <label>Kod z e-maila<input inputMode="numeric" maxLength={6} value={emailCode} onChange={e => setEmailCode(e.target.value.replace(/\D/g,'').slice(0,6))} placeholder="000000" /></label>
+            <button onClick={confirmEmailCode} disabled={busy || emailCode.length !== 6}>{busy ? 'Sprawdzanie…' : 'Potwierdź e-mail'}</button>
+            <button className="secondary" onClick={() => { setEmailCodeSent(false); setEmailCode(''); }} disabled={busy}>Zmień adres / wyślij ponownie</button>
+          </>}
         </>}
 
         {step === 'employment' && <>
@@ -200,14 +291,14 @@ export default function Home() {
 
         {step === 'business' && <>
           <h2>Profil zapisany</h2>
-          <p>Teraz utworzymy Twoją pierwszą sprawę. W kolejnych krokach system sprawdzi PUP, Fundusze Europejskie, LGD i inne pasujące źródła.</p>
+          <p>Utworzymy pierwszą sprawę. Kolejny moduł sprawdzi PUP, Fundusze Europejskie, LGD i pozostałe pasujące źródła.</p>
           <button onClick={startCase} disabled={busy}>Utwórz moją sprawę</button>
         </>}
 
         {step === 'done' && <>
           <div className="success">✓</div>
           <h2>Sprawa utworzona</h2>
-          <p>Profil jest gotowy do dalszej kwalifikacji. Następnym etapem będzie automatyczne dopasowanie właściwych programów i aktualnych naborów.</p>
+          <p>Profil jest gotowy do dalszej kwalifikacji i monitorowania aktualnych naborów.</p>
         </>}
 
         {error && <p className="error">{error}</p>}
