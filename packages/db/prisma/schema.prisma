@@ -89,6 +89,7 @@ model Institution {
   calls        FundingCall[]
   assignments  RegionAssignment[]
   criterionSets LocalCriterionSet[]
+  fundingPrograms FundingProgram[]
 }
 
 model RegionAssignment {
@@ -194,6 +195,31 @@ model FormFieldMapping {
   @@unique([templateId, fieldKey])
 }
 
+model FundingProgram {
+  id                    String   @id @default(cuid())
+  code                  String   @unique
+  name                  String
+  category              String
+  financingType         String
+  operatorInstitutionId String?
+  operatorInstitution   Institution? @relation(fields: [operatorInstitutionId], references: [id], onDelete: SetNull)
+  scope                  String
+  scopeVoivodeships     String[] @default([])
+  applicantTypes        String[] @default([])
+  officialUrl           String?
+  verificationStatus    String   @default("DISCOVERED")
+  active                Boolean  @default(true)
+  metadataJson          Json?
+  verifiedAt            DateTime?
+  createdAt             DateTime @default(now())
+  updatedAt             DateTime @updatedAt
+  calls                 FundingCall[]
+  cases                 Case[]
+  @@index([category, active])
+  @@index([operatorInstitutionId])
+  @@index([verificationStatus])
+}
+
 model FundingCall {
   id                 String   @id @default(cuid())
   institutionId      String
@@ -202,6 +228,8 @@ model FundingCall {
   source             Source?  @relation(fields: [sourceId], references: [id], onDelete: SetNull)
   title              String
   programCode        String?
+  programId          String?
+  program            FundingProgram? @relation(fields: [programId], references: [id], onDelete: SetNull)
   status             String
   opensAt            DateTime?
   closesAt           DateTime?
@@ -220,6 +248,7 @@ model FundingCall {
   @@index([status, opensAt, closesAt])
   @@index([verificationStatus, verifiedAt])
   @@index([institutionId])
+  @@index([programId])
 }
 
 model Case {
@@ -228,6 +257,8 @@ model Case {
   user               User     @relation(fields: [userId], references: [id], onDelete: Cascade)
   status             String
   caseType           String
+  programId          String?
+  program            FundingProgram? @relation(fields: [programId], references: [id], onDelete: SetNull)
   fundingCallId      String?
   fundingCall        FundingCall? @relation(fields: [fundingCallId], references: [id])
   legalSnapshotId    String?
@@ -243,6 +274,7 @@ model Case {
   packageJobs          DocumentPackageJob[]
   @@index([userId, status])
   @@index([fundingCallId])
+  @@index([programId])
 }
 
 model CaseAnswer {
