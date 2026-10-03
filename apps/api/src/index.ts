@@ -402,6 +402,8 @@ app.get('/v1/internal/sources', async (request) => {
       id: true,
       kind: true,
       canonicalUrl: true,
+      displayName: true,
+      discoveredFromUrl: true,
       trustLevel: true,
       contentHash: true,
       etag: true,
@@ -599,6 +601,149 @@ app.post('/v1/internal/pup-directory/import', async (request, reply) => {
     voivodeship,
     institutionsUpserted,
     assignmentsUpserted
+  };
+});
+
+
+
+function classifyOfficialAttachment(name: string, url: string) {
+  const value = `${name} ${url}`.toLowerCase();
+  if (value.includes('regulamin') || value.includes('zasady')) return 'REGULATION';
+  if (value.includes('kryteria')) return 'CRITERIA';
+  if (value.includes('wniosek') || value.includes('formularz')) return 'OFFICIAL_FORM';
+  return 'OFFICIAL_ATTACHMENT';
+}
+
+const attachmentImportSchema = z.object({
+  parentSourceId: z.string().min(1),
+  attachments: z.array(z.object({
+    name: z.string().min(1).max(500),
+    url: z.string().url()
+  })).min(1).max(100)
+});
+
+app.post('/v1/internal/source-attachments/import', async (request, reply) => {
+  requireWorkerSecret(request);
+  const parsed = attachmentImportSchema.safeParse(request.body);
+  if (!parsed.success) {
+    return reply.code(400).send({ error: 'INVALID_ATTACHMENTS', details: parsed.error.flatten() });
+  }
+
+  const parent = await prisma.source.findUnique({
+    where: { id: parsed.data.parentSourceId }
+  });
+  if (!parent) return reply.code(404).send({ error: 'PARENT_SOURCE_NOT_FOUND' });
+
+  const imported = [];
+  for (const attachment of parsed.data.attachments) {
+    const kind = classifyOfficialAttachment(attachment.name, attachment.url);
+    const child = await prisma.source.upsert({
+      where: { canonicalUrl: attachment.url },
+      update: {
+        institutionId: parent.institutionId,
+        displayName: attachment.name,
+        discoveredFromUrl: parent.canonicalUrl,
+        kind,
+        trustLevel: 'OFFICIAL_PRIMARY',
+        enabled: true,
+        scopeVoivodeship: parent.scopeVoivodeship,
+        scopeCounty: parent.scopeCounty,
+        scopeMunicipality: parent.scopeMunicipality
+      },
+      create: {
+        institutionId: parent.institutionId,
+        canonicalUrl: attachment.url,
+        displayName: attachment.name,
+        discoveredFromUrl: parent.canonicalUrl,
+        kind,
+        trustLevel: 'OFFICIAL_PRIMARY',
+        enabled: true,
+        scopeVoivodeship: parent.scopeVoivodeship,
+        scopeCounty: parent.scopeCounty,
+        scopeMunicipality: parent.scopeMunicipality
+      }
+    });
+    imported.push({ id: child.id, name: child.displayName, kind: child.kind, url: child.canonicalUrl });
+  }
+
+  return { imported };
+});
+
+const sourceDocumentSchema = z.object({
+  sourceId: z.string().min(1),
+  originalName: z.string().min(1).max(500),
+  mimeType: z.string().min(1).max(200),
+  sha256: z.string().regex(/^[a-f0-9]{64}$/),
+  storageKey: z.string().min(1).max(1500),
+  downloadedAt: z.string().datetime()
+});
+
+app.post('/v1/internal/source-document', async (request, reply) => {
+  requireWorkerSecret(request);
+  const parsed = sourceDocumentSchema.safeParse(request.body);
+  if (!parsed.success) {
+    return reply.code(400).send({ error: 'INVALID_SOURCE_DOCUMENT', details: parsed.error.flatten() });
+  }
+
+  const source = await prisma.source.findUnique({ where: { id: parsed.data.sourceId } });
+  if (!source) return reply.code(404).send({ error: 'SOURCE_NOT_FOUND' });
+
+  const existing = await prisma.sourceDocument.findUnique({
+    where: {
+      sourceId_sha256: {
+        sourceId: source.id,
+        sha256: parsed.data.sha256
+      }
+    },
+    include: { formTemplates: true }
+  });
+
+  if (existing) {
+    return {
+      documentId: existing.id,
+      created: false,
+      templateId: existing.formTemplates[0]?.id ?? null
+    };
+  }
+
+  const document = await prisma.sourceDocument.create({
+    data: {
+      sourceId: source.id,
+      originalName: parsed.data.originalName,
+      mimeType: parsed.data.mimeType,
+      sha256: parsed.data.sha256,
+      storageKey: parsed.data.storageKey,
+      downloadedAt: new Date(parsed.data.downloadedAt)
+    }
+  });
+
+  let templateId: string | null = null;
+  if (source.kind === 'OFFICIAL_FORM') {
+    await prisma.officialFormTemplate.updateMany({
+      where: {
+        active: true,
+        sourceDocument: { sourceId: source.id }
+      },
+      data: { active: false }
+    });
+
+    const template = await prisma.officialFormTemplate.create({
+      data: {
+        sourceDocumentId: document.id,
+        institutionId: source.institutionId,
+        formCode: `source:${source.id}`,
+        versionLabel: parsed.data.sha256.slice(0, 12),
+        active: true,
+        officialOnly: true
+      }
+    });
+    templateId = template.id;
+  }
+
+  return {
+    documentId: document.id,
+    created: true,
+    templateId
   };
 });
 
