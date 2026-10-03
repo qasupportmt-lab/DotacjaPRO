@@ -352,6 +352,152 @@ app.get('/v1/me/dashboard', async (request) => {
 
 
 
+
+async function buildResolvedCaseValues(caseId: string, userId: string) {
+  const [user, answers] = await Promise.all([
+    prisma.user.findUniqueOrThrow({
+      where: { id: userId },
+      include: { profile: true, fundingProfile: true }
+    }),
+    prisma.caseAnswer.findMany({
+      where: { caseId },
+      orderBy: [{ fieldKey: 'asc' }, { version: 'desc' }]
+    })
+  ]);
+
+  const values: Record<string, unknown> = {
+    'user.email': user.email,
+    'user.firstName': user.telegramFirstName,
+    'user.lastName': user.telegramLastName,
+    'profile.voivodeship': user.profile?.voivodeship,
+    'profile.county': user.profile?.county,
+    'profile.municipality': user.profile?.municipality,
+    'profile.city': user.profile?.city,
+    'profile.postalCode': user.profile?.postalCode,
+    'funding.employmentStatus': user.fundingProfile?.employmentStatus,
+    'funding.plannedLegalForm': user.fundingProfile?.plannedLegalForm,
+    'funding.plannedBusinessDescription': user.fundingProfile?.plannedBusinessDescription,
+    'funding.plannedPkd': user.fundingProfile?.plannedPkd
+  };
+
+  const seen = new Set<string>();
+  for (const answer of answers) {
+    if (seen.has(answer.fieldKey)) continue;
+    values[answer.fieldKey] = answer.valueJson;
+    seen.add(answer.fieldKey);
+  }
+
+  return values;
+}
+
+function valueIsPresent(value: unknown) {
+  if (value === null || value === undefined) return false;
+  if (typeof value === 'string') return value.trim().length > 0;
+  if (Array.isArray(value)) return value.length > 0;
+  return true;
+}
+
+const renderRequestSchema = z.object({
+  templateId: z.string().min(1)
+});
+
+app.post('/v1/cases/:caseId/render', async (request, reply) => {
+  const userId = await requireUserId(request);
+  const caseId = (request.params as { caseId: string }).caseId;
+  const parsed = renderRequestSchema.safeParse(request.body);
+  if (!parsed.success) return reply.code(400).send({ error: 'INVALID_RENDER_REQUEST' });
+
+  const item = await prisma.case.findFirst({
+    where: { id: caseId, userId }
+  });
+  if (!item) return reply.code(404).send({ error: 'CASE_NOT_FOUND' });
+
+  const user = await prisma.user.findUnique({
+    where: { id: userId },
+    select: { emailVerifiedAt: true }
+  });
+  if (!user?.emailVerifiedAt) {
+    return reply.code(409).send({ error: 'VERIFIED_EMAIL_REQUIRED' });
+  }
+
+  const template = await prisma.officialFormTemplate.findFirst({
+    where: {
+      id: parsed.data.templateId,
+      active: true,
+      officialOnly: true,
+      mappingStatus: 'VERIFIED'
+    },
+    include: {
+      fieldMappings: { orderBy: { sortOrder: 'asc' } },
+      sourceDocument: true
+    }
+  });
+  if (!template) {
+    return reply.code(409).send({ error: 'VERIFIED_OFFICIAL_TEMPLATE_REQUIRED' });
+  }
+
+  const values = await buildResolvedCaseValues(caseId, userId);
+  const missing = template.fieldMappings
+    .filter((mapping) => mapping.required && !valueIsPresent(values[mapping.fieldKey]))
+    .map((mapping) => ({
+      fieldKey: mapping.fieldKey,
+      label: mapping.questionLabel ?? mapping.fieldKey
+    }));
+
+  if (missing.length > 0) {
+    return reply.code(409).send({
+      error: 'REQUIRED_FORM_DATA_MISSING',
+      missing
+    });
+  }
+
+  const existing = await prisma.documentRenderJob.findFirst({
+    where: {
+      caseId,
+      templateId: template.id,
+      status: { in: ['QUEUED', 'PROCESSING'] }
+    },
+    orderBy: { requestedAt: 'desc' }
+  });
+  if (existing) return { job: existing, reused: true };
+
+  const job = await prisma.$transaction(async (tx) => {
+    await tx.case.update({
+      where: { id: caseId },
+      data: {
+        formTemplateId: template.id,
+        status: item.status === 'QUALIFICATION' ? 'APPLICATION_PREPARATION' : item.status
+      }
+    });
+
+    return tx.documentRenderJob.create({
+      data: {
+        caseId,
+        templateId: template.id,
+        status: 'QUEUED'
+      }
+    });
+  });
+
+  await prisma.auditEvent.create({
+    data: {
+      userId,
+      actorType: 'USER',
+      action: 'OFFICIAL_FORM_RENDER_REQUESTED',
+      entity: 'DocumentRenderJob',
+      entityId: job.id,
+      metadata: {
+        caseId,
+        templateId: template.id,
+        sourceDocumentId: template.sourceDocumentId,
+        sourceSha256: template.sourceDocument.sha256
+      }
+    }
+  });
+
+  return reply.code(202).send({ job, reused: false });
+});
+
 const notificationPreferenceSchema = z.object({
   morningDigest: z.boolean().optional(),
   criticalAlerts: z.boolean().optional(),
@@ -747,6 +893,202 @@ app.post('/v1/internal/source-document', async (request, reply) => {
   };
 });
 
+
+
+app.post('/v1/internal/document-jobs/claim', async (request) => {
+  requireWorkerSecret(request);
+
+  for (let attempt = 0; attempt < 3; attempt++) {
+    const candidate = await prisma.documentRenderJob.findFirst({
+      where: { status: 'QUEUED' },
+      orderBy: { requestedAt: 'asc' },
+      select: { id: true }
+    });
+
+    if (!candidate) return { job: null };
+
+    const claimed = await prisma.documentRenderJob.updateMany({
+      where: { id: candidate.id, status: 'QUEUED' },
+      data: { status: 'PROCESSING', startedAt: new Date() }
+    });
+
+    if (claimed.count === 1) {
+      return { job: { id: candidate.id } };
+    }
+  }
+
+  return { job: null };
+});
+
+app.get('/v1/internal/document-jobs/:id/payload', async (request, reply) => {
+  requireWorkerSecret(request);
+  const id = (request.params as { id: string }).id;
+
+  const job = await prisma.documentRenderJob.findUnique({
+    where: { id },
+    include: {
+      case: { select: { id: true, userId: true } },
+      template: {
+        include: {
+          sourceDocument: true,
+          fieldMappings: { orderBy: { sortOrder: 'asc' } }
+        }
+      }
+    }
+  });
+
+  if (!job) return reply.code(404).send({ error: 'DOCUMENT_JOB_NOT_FOUND' });
+  if (job.status !== 'PROCESSING') {
+    return reply.code(409).send({ error: 'DOCUMENT_JOB_NOT_PROCESSING' });
+  }
+  if (
+    !job.template.active ||
+    !job.template.officialOnly ||
+    job.template.mappingStatus !== 'VERIFIED'
+  ) {
+    return reply.code(409).send({ error: 'TEMPLATE_NOT_RENDERABLE' });
+  }
+
+  const values = await buildResolvedCaseValues(job.caseId, job.case.userId);
+
+  return {
+    job: {
+      id: job.id,
+      caseId: job.caseId,
+      templateId: job.templateId
+    },
+    source: {
+      documentId: job.template.sourceDocument.id,
+      originalName: job.template.sourceDocument.originalName,
+      mimeType: job.template.sourceDocument.mimeType,
+      sha256: job.template.sourceDocument.sha256,
+      storageKey: job.template.sourceDocument.storageKey
+    },
+    template: {
+      versionLabel: job.template.versionLabel,
+      mappingVersion: job.template.mappingVersion,
+      mappings: job.template.fieldMappings.map((mapping) => ({
+        fieldKey: mapping.fieldKey,
+        sourcePath: mapping.sourcePath,
+        locatorType: mapping.locatorType,
+        locatorJson: mapping.locatorJson,
+        inputType: mapping.inputType,
+        required: mapping.required
+      }))
+    },
+    values
+  };
+});
+
+const documentJobResultSchema = z.discriminatedUnion('success', [
+  z.object({
+    success: z.literal(true),
+    outputStorageKey: z.string().min(1).max(1500),
+    outputSha256: z.string().regex(/^[a-f0-9]{64}$/),
+    outputMimeType: z.string().min(1).max(200),
+    outputName: z.string().min(1).max(500)
+  }),
+  z.object({
+    success: z.literal(false),
+    errorCode: z.string().min(1).max(120),
+    errorMessage: z.string().min(1).max(4000)
+  })
+]);
+
+app.post('/v1/internal/document-jobs/:id/result', async (request, reply) => {
+  requireWorkerSecret(request);
+  const id = (request.params as { id: string }).id;
+  const parsed = documentJobResultSchema.safeParse(request.body);
+  if (!parsed.success) {
+    return reply.code(400).send({ error: 'INVALID_DOCUMENT_JOB_RESULT' });
+  }
+
+  const job = await prisma.documentRenderJob.findUnique({
+    where: { id },
+    include: {
+      template: { include: { sourceDocument: true } },
+      case: { select: { userId: true } }
+    }
+  });
+  if (!job) return reply.code(404).send({ error: 'DOCUMENT_JOB_NOT_FOUND' });
+  if (!['PROCESSING', 'QUEUED'].includes(job.status)) {
+    return reply.code(409).send({ error: 'DOCUMENT_JOB_ALREADY_FINALIZED' });
+  }
+
+  if (!parsed.data.success) {
+    const failed = await prisma.documentRenderJob.update({
+      where: { id },
+      data: {
+        status: 'FAILED',
+        errorCode: parsed.data.errorCode,
+        errorMessage: parsed.data.errorMessage,
+        completedAt: new Date()
+      }
+    });
+    return { job: failed };
+  }
+
+  const result = await prisma.$transaction(async (tx) => {
+    const completed = await tx.documentRenderJob.update({
+      where: { id },
+      data: {
+        status: 'COMPLETED',
+        outputStorageKey: parsed.data.outputStorageKey,
+        outputSha256: parsed.data.outputSha256,
+        outputMimeType: parsed.data.outputMimeType,
+        outputName: parsed.data.outputName,
+        completedAt: new Date(),
+        errorCode: null,
+        errorMessage: null
+      }
+    });
+
+    const document = await tx.caseDocument.upsert({
+      where: { renderJobId: id },
+      update: {
+        storageKey: parsed.data.outputStorageKey,
+        originalName: parsed.data.outputName,
+        mimeType: parsed.data.outputMimeType,
+        templateHash: job.template.sourceDocument.sha256,
+        sourceDocumentId: job.template.sourceDocument.id
+      },
+      create: {
+        caseId: job.caseId,
+        type: 'FILLED_OFFICIAL_FORM',
+        originalName: parsed.data.outputName,
+        mimeType: parsed.data.outputMimeType,
+        storageKey: parsed.data.outputStorageKey,
+        officialSource: false,
+        templateHash: job.template.sourceDocument.sha256,
+        sourceDocumentId: job.template.sourceDocument.id,
+        renderJobId: id
+      }
+    });
+
+    return { completed, document };
+  });
+
+  await prisma.auditEvent.create({
+    data: {
+      userId: job.case.userId,
+      actorType: 'SYSTEM',
+      action: 'OFFICIAL_FORM_RENDER_COMPLETED',
+      entity: 'CaseDocument',
+      entityId: result.document.id,
+      metadata: {
+        renderJobId: id,
+        sourceDocumentId: job.template.sourceDocument.id,
+        templateHash: job.template.sourceDocument.sha256,
+        outputSha256: parsed.data.outputSha256
+      }
+    }
+  });
+
+  return {
+    job: result.completed,
+    document: result.document
+  };
+});
 
 function eventAppliesToRegion(
   payload: unknown,
