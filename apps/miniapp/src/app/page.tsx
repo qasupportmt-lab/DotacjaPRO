@@ -35,13 +35,19 @@ export default function Home() {
     city: '',
     municipality: '',
     county: '',
-    postalCode: ''
+    postalCode: '',
+    terytMunicipalityCode: '',
+    terytLocalityCode: ''
   });
   const [regionSuggestions, setRegionSuggestions] = useState<Array<{
-    municipality: string | null;
-    city: string | null;
+    label: string;
+    city: string;
+    municipality: string;
     county: string | null;
-    pup: { id: string; name: string; officialUrl: string };
+    pup: { id: string; name: string; officialUrl: string } | null;
+    terytVerified: boolean;
+    terytMunicipalityCode?: string;
+    terytLocalityCode?: string;
   }>>([]);
   const [selectedPupName, setSelectedPupName] = useState<string | null>(null);
   const [email, setEmail] = useState('');
@@ -49,6 +55,10 @@ export default function Home() {
   const [emailCodeSent, setEmailCodeSent] = useState(false);
   const [employmentStatus, setEmploymentStatus] = useState('UNEMPLOYED_REGISTERED');
   const [description, setDescription] = useState('');
+  const [qualification, setQualification] = useState<{
+    status: string;
+    summary: string;
+  } | null>(null);
 
   const authHeaders = useMemo(
     () => token ? { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' } : undefined,
@@ -69,19 +79,56 @@ export default function Home() {
 
     const controller = new AbortController();
     const timer = window.setTimeout(async () => {
+      const params = new URLSearchParams({
+        voivodeship: region.voivodeship,
+        q: region.city.trim()
+      });
+
       try {
-        const params = new URLSearchParams({
-          voivodeship: region.voivodeship,
-          q: region.city.trim()
-        });
-        const res = await fetch(`${API}/v1/regions/search?${params.toString()}`, {
-          signal: controller.signal
-        });
-        if (!res.ok) return;
-        const data = await res.json();
-        setRegionSuggestions(data.items ?? []);
+        const terytResponse = await fetch(
+          `${API}/v1/locations/search?${params.toString()}`,
+          { signal: controller.signal }
+        );
+
+        if (terytResponse.ok) {
+          const data = await terytResponse.json();
+          const items = (data.items ?? []).map((item: any) => ({
+            label: item.locality.name,
+            city: item.locality.name,
+            municipality: item.municipality.name,
+            county: item.municipality.county,
+            pup: item.pup,
+            terytVerified: true,
+            terytMunicipalityCode: item.municipality.tercCode,
+            terytLocalityCode: item.locality.simcCode
+          }));
+
+          if (items.length > 0) {
+            setRegionSuggestions(items);
+            return;
+          }
+        }
+
+        const routingResponse = await fetch(
+          `${API}/v1/regions/search?${params.toString()}`,
+          { signal: controller.signal }
+        );
+        if (!routingResponse.ok) return;
+
+        const fallback = await routingResponse.json();
+        setRegionSuggestions((fallback.items ?? []).map((item: any) => {
+          const label = item.municipality ?? item.city ?? '';
+          return {
+            label,
+            city: item.city ?? label,
+            municipality: item.municipality ?? label,
+            county: item.county ?? null,
+            pup: item.pup ?? null,
+            terytVerified: false
+          };
+        }));
       } catch {
-        // Sugestie są pomocą. Ich brak nie blokuje ręcznego zapisu regionu.
+        // Brak sugestii nie blokuje ręcznego zapisu regionu.
       }
     }, 250);
 
@@ -149,6 +196,8 @@ export default function Home() {
       if (region.municipality) body.municipality = region.municipality;
       if (region.county) body.county = region.county;
       if (region.postalCode) body.postalCode = region.postalCode;
+      if (region.terytMunicipalityCode) body.terytMunicipalityCode = region.terytMunicipalityCode;
+      if (region.terytLocalityCode) body.terytLocalityCode = region.terytLocalityCode;
 
       const res = await fetch(`${API}/v1/me/region`, {
         method: 'PUT',
@@ -247,6 +296,29 @@ export default function Home() {
         body: JSON.stringify({ caseType: 'START_BUSINESS' })
       });
       if (!res.ok) throw new Error('Nie udało się utworzyć sprawy.');
+
+      const data = await res.json();
+      const caseId = data.case.id;
+
+      const qualificationResponse = await fetch(
+        `${API}/v1/cases/${caseId}/qualify`,
+        {
+          method: 'POST',
+          headers: authHeaders
+        }
+      );
+
+      if (qualificationResponse.ok) {
+        const result = await qualificationResponse.json();
+        const firstPath = result.paths?.[0];
+        if (firstPath) {
+          setQualification({
+            status: firstPath.status,
+            summary: firstPath.summary
+          });
+        }
+      }
+
       setStep('done');
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Błąd tworzenia sprawy');
@@ -290,31 +362,42 @@ export default function Home() {
             <option value="">Wybierz</option>{VOIVODESHIPS.map(v => <option key={v}>{v}</option>)}
           </select></label>
           <label>Miasto / miejscowość<input value={region.city} onChange={e => {
-            setRegion({...region, city:e.target.value});
+            setRegion({
+              ...region,
+              city: e.target.value,
+              terytMunicipalityCode: '',
+              terytLocalityCode: ''
+            });
             setSelectedPupName(null);
           }} placeholder="np. Sosnowiec" /></label>
           {regionSuggestions.length > 0 && <div className="suggestions">
-            {regionSuggestions.map((item) => {
-              const label = item.municipality ?? item.city ?? '';
-              return <button
+            {regionSuggestions.map((item) => (
+              <button
                 type="button"
                 className="suggestion"
-                key={`${item.pup.id}-${label}`}
+                key={`${item.terytLocalityCode ?? item.label}-${item.pup?.id ?? 'no-pup'}`}
                 onClick={() => {
                   setRegion({
                     ...region,
-                    city: item.city ?? label,
-                    municipality: item.municipality ?? label,
-                    county: item.county ?? region.county
+                    city: item.city,
+                    municipality: item.municipality,
+                    county: item.county ?? '',
+                    terytMunicipalityCode: item.terytMunicipalityCode ?? '',
+                    terytLocalityCode: item.terytLocalityCode ?? ''
                   });
-                  setSelectedPupName(item.pup.name);
+                  setSelectedPupName(item.pup?.name ?? null);
                   setRegionSuggestions([]);
                 }}
               >
-                <strong>{label}</strong>
-                <span>{item.pup.name}</span>
-              </button>;
-            })}
+                <strong>{item.label}</strong>
+                <span>
+                  {item.municipality}
+                  {item.county ? ` · ${item.county}` : ''}
+                  {item.terytVerified ? ' · TERYT ✓' : ''}
+                </span>
+                <span>{item.pup?.name ?? 'PUP do weryfikacji'}</span>
+              </button>
+            ))}
           </div>}
           {selectedPupName && <p className="verified">✓ Właściwy urząd: {selectedPupName}</p>}
           <label>Gmina <small>opcjonalnie</small><input value={region.municipality} onChange={e => setRegion({...region, municipality:e.target.value})} /></label>
@@ -362,7 +445,10 @@ export default function Home() {
         {step === 'done' && <>
           <div className="success">✓</div>
           <h2>Sprawa utworzona</h2>
-          <p>Profil jest gotowy do dalszej kwalifikacji i monitorowania aktualnych naborów.</p>
+          {qualification ? <>
+            <p className="qualification-status">{qualification.status}</p>
+            <p>{qualification.summary}</p>
+          </> : <p>Profil jest gotowy do dalszej kwalifikacji i monitorowania aktualnych naborów.</p>}
         </>}
 
         {error && <p className="error">{error}</p>}
