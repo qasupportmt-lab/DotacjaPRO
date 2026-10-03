@@ -1,4 +1,5 @@
 import Fastify, { type FastifyRequest } from 'fastify';
+import crypto from 'node:crypto';
 import cors from '@fastify/cors';
 import { z } from 'zod';
 import { prisma } from '@dotacjapro/db';
@@ -262,6 +263,108 @@ app.get('/v1/me/dashboard', async (request) => {
     },
     cases: user.cases,
     notifications: user.notifications
+  };
+});
+
+
+function requireWorkerSecret(request: FastifyRequest) {
+  const configured = process.env.INTERNAL_WORKER_SECRET;
+  const received = request.headers['x-worker-secret'];
+  if (!configured || typeof received !== 'string') {
+    throw Object.assign(new Error('Unauthorized worker'), { statusCode: 401 });
+  }
+
+  const a = Buffer.from(configured);
+  const b = Buffer.from(received);
+  if (a.length !== b.length || !crypto.timingSafeEqual(a, b)) {
+    throw Object.assign(new Error('Unauthorized worker'), { statusCode: 401 });
+  }
+}
+
+app.get('/v1/internal/sources', async (request) => {
+  requireWorkerSecret(request);
+  const sources = await prisma.source.findMany({
+    where: { enabled: true },
+    orderBy: [{ trustLevel: 'asc' }, { canonicalUrl: 'asc' }],
+    select: {
+      id: true,
+      kind: true,
+      canonicalUrl: true,
+      trustLevel: true,
+      contentHash: true,
+      etag: true,
+      lastModified: true,
+      checkedAt: true,
+      scopeVoivodeship: true,
+      scopeCounty: true,
+      scopeMunicipality: true
+    }
+  });
+  return { sources };
+});
+
+const sourceScanSchema = z.object({
+  sourceId: z.string().min(1),
+  sha256: z.string().regex(/^[a-f0-9]{64}$/),
+  statusCode: z.number().int().min(100).max(599),
+  etag: z.string().max(1000).optional(),
+  lastModified: z.string().max(1000).optional(),
+  scannedAt: z.string().datetime()
+});
+
+app.post('/v1/internal/source-scan', async (request, reply) => {
+  requireWorkerSecret(request);
+  const parsed = sourceScanSchema.safeParse(request.body);
+  if (!parsed.success) {
+    return reply.code(400).send({ error: 'INVALID_SCAN_REPORT', details: parsed.error.flatten() });
+  }
+
+  const report = parsed.data;
+  const source = await prisma.source.findUnique({ where: { id: report.sourceId } });
+  if (!source) return reply.code(404).send({ error: 'SOURCE_NOT_FOUND' });
+
+  const previousHash = source.contentHash;
+  const changed = Boolean(previousHash && previousHash !== report.sha256);
+
+  const updated = await prisma.source.update({
+    where: { id: source.id },
+    data: {
+      contentHash: report.sha256,
+      etag: report.etag ?? null,
+      lastModified: report.lastModified ?? null,
+      lastStatusCode: report.statusCode,
+      checkedAt: new Date(report.scannedAt)
+    }
+  });
+
+  let changeEventId: string | null = null;
+  if (changed) {
+    const event = await prisma.changeEvent.create({
+      data: {
+        sourceId: source.id,
+        changeType: 'SOURCE_CONTENT_CHANGED',
+        severity: source.kind === 'OFFICIAL_FORM' || source.kind === 'LEGAL_ACT' ? 'YELLOW' : 'INFORMATION',
+        summary: `Wykryto zmianę w oficjalnym źródle: ${source.canonicalUrl}`,
+        verified: false,
+        payload: {
+          previousHash,
+          currentHash: report.sha256,
+          sourceKind: source.kind,
+          sourceUrl: source.canonicalUrl,
+          scopeVoivodeship: source.scopeVoivodeship,
+          scopeCounty: source.scopeCounty,
+          scopeMunicipality: source.scopeMunicipality
+        }
+      }
+    });
+    changeEventId = event.id;
+  }
+
+  return {
+    sourceId: updated.id,
+    baselineCreated: previousHash === null,
+    changed,
+    changeEventId
   };
 });
 
