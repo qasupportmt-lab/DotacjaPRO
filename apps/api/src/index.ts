@@ -1228,28 +1228,32 @@ app.post('/v1/internal/document-jobs/:id/result', async (request, reply) => {
     return reply.code(409).send({ error: 'DOCUMENT_JOB_ALREADY_FINALIZED' });
   }
 
-  if (!parsed.data.success) {
+  const resultData = parsed.data;
+
+  if (resultData.success === false) {
     const failed = await prisma.documentRenderJob.update({
       where: { id },
       data: {
         status: 'FAILED',
-        errorCode: parsed.data.errorCode,
-        errorMessage: parsed.data.errorMessage,
+        errorCode: resultData.errorCode,
+        errorMessage: resultData.errorMessage,
         completedAt: new Date()
       }
     });
     return { job: failed };
   }
 
+  const successData = resultData;
+
   const result = await prisma.$transaction(async (tx) => {
     const completed = await tx.documentRenderJob.update({
       where: { id },
       data: {
         status: 'COMPLETED',
-        outputStorageKey: parsed.data.outputStorageKey,
-        outputSha256: parsed.data.outputSha256,
-        outputMimeType: parsed.data.outputMimeType,
-        outputName: parsed.data.outputName,
+        outputStorageKey: successData.outputStorageKey,
+        outputSha256: successData.outputSha256,
+        outputMimeType: successData.outputMimeType,
+        outputName: successData.outputName,
         completedAt: new Date(),
         errorCode: null,
         errorMessage: null
@@ -1259,18 +1263,18 @@ app.post('/v1/internal/document-jobs/:id/result', async (request, reply) => {
     const document = await tx.caseDocument.upsert({
       where: { renderJobId: id },
       update: {
-        storageKey: parsed.data.outputStorageKey,
-        originalName: parsed.data.outputName,
-        mimeType: parsed.data.outputMimeType,
+        storageKey: successData.outputStorageKey,
+        originalName: successData.outputName,
+        mimeType: successData.outputMimeType,
         templateHash: job.template.sourceDocument.sha256,
         sourceDocumentId: job.template.sourceDocument.id
       },
       create: {
         caseId: job.caseId,
         type: 'FILLED_OFFICIAL_FORM',
-        originalName: parsed.data.outputName,
-        mimeType: parsed.data.outputMimeType,
-        storageKey: parsed.data.outputStorageKey,
+        originalName: successData.outputName,
+        mimeType: successData.outputMimeType,
+        storageKey: successData.outputStorageKey,
         officialSource: false,
         templateHash: job.template.sourceDocument.sha256,
         sourceDocumentId: job.template.sourceDocument.id,
@@ -1292,7 +1296,7 @@ app.post('/v1/internal/document-jobs/:id/result', async (request, reply) => {
         renderJobId: id,
         sourceDocumentId: job.template.sourceDocument.id,
         templateHash: job.template.sourceDocument.sha256,
-        outputSha256: parsed.data.outputSha256
+        outputSha256: successData.outputSha256
       }
     }
   });
