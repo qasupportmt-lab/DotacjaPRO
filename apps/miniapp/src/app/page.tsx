@@ -23,16 +23,6 @@ const VOIVODESHIPS = [
 
 type Step = 'welcome' | 'region' | 'email' | 'employment' | 'business' | 'done';
 
-type LocalCriterion = {
-  code: string;
-  title: string;
-  description: string | null;
-  maxPoints: number | null;
-  failIfZero: boolean;
-  scoring: unknown;
-  evidenceHint: string | null;
-};
-
 type LocalCriteriaSet = {
   id: string;
   title: string;
@@ -40,7 +30,6 @@ type LocalCriteriaSet = {
   maximumPoints: number | null;
   sourceHash: string;
   officialSourceUrl: string;
-  criteria: LocalCriterion[];
 };
 
 type ActiveCall = {
@@ -59,16 +48,35 @@ type QualificationView = {
   activeCalls: ActiveCall[];
 };
 
+type CriterionQuestion = {
+  code: string;
+  title: string;
+  description: string | null;
+  inputType: 'BOOLEAN' | 'SELECT' | 'NUMBER' | 'EVIDENCE';
+  required: boolean;
+  maxPoints: number | null;
+  evidenceHint: string | null;
+  options?: Array<{ value: string; label: string }>;
+};
+
 type CriterionAssessment = {
   status: string;
-  confirmedPoints: number;
-  unresolvedMaxPoints: number;
-  possiblePointsRange: { minimum: number; maximum: number };
+  knownPoints: number;
+  possiblePoints: number;
+  publishedMaximumPoints: number | null;
   minimumPoints: number | null;
-  maximumPoints: number | null;
-  triggeredBlockers: Array<{ code: string; title: string }>;
-  unresolvedBlockers: Array<{ code: string; title: string }>;
-  disclaimer: string;
+  thresholdMet: boolean | null;
+  blockingFailures: string[];
+  unresolvedCriteria: string[];
+  summary: string;
+  results: Array<{
+    code: string;
+    title: string;
+    state: string;
+    points: number | null;
+    maxPoints: number | null;
+    reason: string;
+  }>;
 };
 
 const API = process.env.NEXT_PUBLIC_API_BASE_URL ?? 'http://localhost:4000';
@@ -105,7 +113,9 @@ export default function Home() {
   const [description, setDescription] = useState('');
   const [caseId, setCaseId] = useState<string | null>(null);
   const [qualification, setQualification] = useState<QualificationView | null>(null);
-  const [criterionAnswers, setCriterionAnswers] = useState<Record<string, unknown>>({});
+  const [selectedCriterionSetId, setSelectedCriterionSetId] = useState<string | null>(null);
+  const [criterionQuestions, setCriterionQuestions] = useState<CriterionQuestion[]>([]);
+  const [criterionAnswers, setCriterionAnswers] = useState<Record<string, string | number | boolean | null>>({});
   const [criterionAssessment, setCriterionAssessment] = useState<CriterionAssessment | null>(null);
 
   const authHeaders = useMemo(
@@ -113,20 +123,20 @@ export default function Home() {
     [token]
   );
 
-  function scoringConfig(value: unknown): Record<string, unknown> | null {
-    if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
-    return value as Record<string, unknown>;
-  }
-
   function assessmentLabel(status: string) {
     const labels: Record<string, string> = {
-      BLOCKING_RULE_TRIGGERED: 'Wykryto regułę blokującą',
-      BELOW_THRESHOLD_RANGE: 'Zakres poniżej progu',
-      NUMERIC_THRESHOLD_REACHED: 'Próg liczbowy osiągnięty',
-      PENDING_REVIEW: 'Wymaga dalszej oceny',
-      NO_VERIFIED_THRESHOLD: 'Brak zweryfikowanego progu'
+      BLOCKING_CRITERION_FAILED: 'Kryterium blokujące niespełnione',
+      BELOW_LOCAL_THRESHOLD: 'Wynik poniżej progu',
+      LOCAL_THRESHOLD_MET: 'Próg punktowy osiągnięty',
+      NEEDS_REVIEW: 'Wymaga dalszej oceny',
+      SCORING_COMPLETE_NO_THRESHOLD: 'Punktacja policzona — brak progu'
     };
     return labels[status] ?? status;
+  }
+
+  function localDate(value: string | null) {
+    if (!value) return null;
+    return new Date(value).toLocaleDateString('pl-PL');
   }
 
 
@@ -351,6 +361,53 @@ export default function Home() {
   }
 
 
+  async function loadCriteria(criterionSetId: string) {
+    if (!caseId || !token) return;
+    setBusy(true);
+    setError(null);
+    setCriterionAssessment(null);
+
+    try {
+      const params = new URLSearchParams({ criterionSetId });
+      const res = await fetch(
+        `${API}/v1/cases/${caseId}/local-criteria?${params.toString()}`,
+        { headers: authHeaders }
+      );
+
+      if (!res.ok) {
+        throw new Error('Nie udało się pobrać zweryfikowanych kryteriów.');
+      }
+
+      const data = await res.json();
+      setSelectedCriterionSetId(criterionSetId);
+      setCriterionQuestions(data.questions ?? []);
+
+      const previousAnswers = data.latestAssessment?.answers;
+      if (
+        previousAnswers &&
+        typeof previousAnswers === 'object' &&
+        !Array.isArray(previousAnswers)
+      ) {
+        setCriterionAnswers(previousAnswers);
+      } else {
+        setCriterionAnswers({});
+      }
+
+      const previousResult = data.latestAssessment?.result;
+      if (
+        previousResult &&
+        typeof previousResult === 'object' &&
+        !Array.isArray(previousResult)
+      ) {
+        setCriterionAssessment(previousResult);
+      }
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Błąd pobierania kryteriów');
+    } finally {
+      setBusy(false);
+    }
+  }
+
   async function assessCriteria(criterionSetId: string) {
     if (!caseId || !token) return;
     setBusy(true);
@@ -358,7 +415,7 @@ export default function Home() {
 
     try {
       const res = await fetch(
-        `${API}/v1/cases/${caseId}/criterion-assessment`,
+        `${API}/v1/cases/${caseId}/local-criteria/assess`,
         {
           method: 'POST',
           headers: authHeaders,
@@ -370,23 +427,20 @@ export default function Home() {
       );
 
       if (!res.ok) {
-        throw new Error('Nie udało się policzyć samooceny kryteriów.');
+        const data = await res.json().catch(() => ({}));
+        if (data.error === 'FUNDING_CALL_CLOSED') {
+          throw new Error('Ten nabór został już zamknięty.');
+        }
+        if (data.error === 'FUNDING_CALL_NOT_ACTIVE_OR_VERIFIED') {
+          throw new Error('Nabór nie jest obecnie aktywny albo nie został jeszcze zweryfikowany.');
+        }
+        throw new Error('Nie udało się policzyć punktacji.');
       }
 
       const data = await res.json();
-      setCriterionAssessment({
-        status: data.status,
-        confirmedPoints: data.confirmedPoints,
-        unresolvedMaxPoints: data.unresolvedMaxPoints,
-        possiblePointsRange: data.possiblePointsRange,
-        minimumPoints: data.minimumPoints,
-        maximumPoints: data.maximumPoints,
-        triggeredBlockers: data.triggeredBlockers ?? [],
-        unresolvedBlockers: data.unresolvedBlockers ?? [],
-        disclaimer: data.disclaimer
-      });
+      setCriterionAssessment(data.result);
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Błąd samooceny kryteriów');
+      setError(e instanceof Error ? e.message : 'Błąd punktacji');
     } finally {
       setBusy(false);
     }
@@ -568,9 +622,9 @@ export default function Home() {
                     </div>
 
                     <p className="call-meta">
-                      {call.opensAt ? `Start: ${new Date(call.opensAt).toLocaleDateString('pl-PL')}` : 'Start: wg ogłoszenia'}
+                      {call.opensAt ? `Start: ${localDate(call.opensAt)}` : 'Start: wg ogłoszenia'}
                       {' · '}
-                      {call.closesAt ? `Koniec: ${new Date(call.closesAt).toLocaleDateString('pl-PL')}` : 'Koniec: wg ogłoszenia'}
+                      {call.closesAt ? `Koniec: ${localDate(call.closesAt)}` : 'Koniec: wg ogłoszenia'}
                     </p>
 
                     {call.officialUrl && (
@@ -600,136 +654,183 @@ export default function Home() {
                           Oficjalne źródło kryteriów
                         </a>
 
-                        <div className="criteria-list">
-                          {call.localCriteria.criteria.map((criterion) => {
-                            const config = scoringConfig(criterion.scoring);
-                            const auto = config?.mode === 'AUTO';
-                            const type = typeof config?.type === 'string' ? config.type : null;
+                        <button
+                          className="secondary"
+                          onClick={() => loadCriteria(call.localCriteria!.id)}
+                          disabled={busy}
+                        >
+                          {selectedCriterionSetId === call.localCriteria.id
+                            ? 'Odśwież pytania'
+                            : 'Sprawdź moje kryteria'}
+                        </button>
 
-                            return (
-                              <div className="criterion" key={criterion.code}>
+                        {selectedCriterionSetId === call.localCriteria.id && (
+                          <div className="criteria-list">
+                            {criterionQuestions.map((question) => (
+                              <div className="criterion" key={question.code}>
                                 <div className="criterion-title">
-                                  <strong>{criterion.title}</strong>
+                                  <strong>{question.title}</strong>
                                   <span>
-                                    {criterion.maxPoints !== null ? `max ${criterion.maxPoints} pkt` : 'punkty wg regulaminu'}
+                                    {question.maxPoints !== null
+                                      ? `max ${question.maxPoints} pkt`
+                                      : 'ocena wg zasad urzędu'}
                                   </span>
                                 </div>
 
-                                {criterion.description && <p>{criterion.description}</p>}
-                                {criterion.failIfZero && <p className="warning">0 pkt może blokować dalszą ocenę.</p>}
+                                {question.description && <p>{question.description}</p>}
+                                {question.evidenceHint && (
+                                  <p className="assessment-note">{question.evidenceHint}</p>
+                                )}
 
-                                {auto && type === 'BOOLEAN_POINTS' && (
+                                {question.inputType === 'BOOLEAN' && (
                                   <label>
                                     Odpowiedź
                                     <select
                                       value={
-                                        criterionAnswers[criterion.code] === true
+                                        criterionAnswers[question.code] === true
                                           ? 'true'
-                                          : criterionAnswers[criterion.code] === false
+                                          : criterionAnswers[question.code] === false
                                             ? 'false'
                                             : ''
                                       }
                                       onChange={(e) => setCriterionAnswers({
                                         ...criterionAnswers,
-                                        [criterion.code]: e.target.value === ''
-                                          ? undefined
+                                        [question.code]: e.target.value === ''
+                                          ? null
                                           : e.target.value === 'true'
                                       })}
                                     >
                                       <option value="">Wybierz</option>
-                                      <option value="true">Tak</option>
-                                      <option value="false">Nie</option>
+                                      {(question.options ?? [
+                                        { value: 'true', label: 'Tak' },
+                                        { value: 'false', label: 'Nie' }
+                                      ]).map((option) => (
+                                        <option key={option.value} value={option.value}>
+                                          {option.label}
+                                        </option>
+                                      ))}
                                     </select>
                                   </label>
                                 )}
 
-                                {auto && type === 'ENUM_POINTS' && (() => {
-                                  const options = scoringConfig(config?.options);
-                                  return options ? (
-                                    <label>
-                                      Odpowiedź
-                                      <select
-                                        value={String(criterionAnswers[criterion.code] ?? '')}
-                                        onChange={(e) => setCriterionAnswers({
-                                          ...criterionAnswers,
-                                          [criterion.code]: e.target.value || undefined
-                                        })}
-                                      >
-                                        <option value="">Wybierz</option>
-                                        {Object.keys(options).map((option) => (
-                                          <option key={option} value={option}>{option}</option>
-                                        ))}
-                                      </select>
-                                    </label>
-                                  ) : null;
-                                })()}
+                                {question.inputType === 'SELECT' && (
+                                  <label>
+                                    Odpowiedź
+                                    <select
+                                      value={String(criterionAnswers[question.code] ?? '')}
+                                      onChange={(e) => setCriterionAnswers({
+                                        ...criterionAnswers,
+                                        [question.code]: e.target.value || null
+                                      })}
+                                    >
+                                      <option value="">Wybierz</option>
+                                      {(question.options ?? []).map((option) => (
+                                        <option key={option.value} value={option.value}>
+                                          {option.label}
+                                        </option>
+                                      ))}
+                                    </select>
+                                  </label>
+                                )}
 
-                                {auto && type === 'NUMBER_RANGES' && (
+                                {question.inputType === 'NUMBER' && (
                                   <label>
                                     Wartość
                                     <input
                                       type="number"
                                       value={
-                                        typeof criterionAnswers[criterion.code] === 'number'
-                                          ? String(criterionAnswers[criterion.code])
+                                        typeof criterionAnswers[question.code] === 'number'
+                                          ? String(criterionAnswers[question.code])
                                           : ''
                                       }
                                       onChange={(e) => setCriterionAnswers({
                                         ...criterionAnswers,
-                                        [criterion.code]: e.target.value === ''
-                                          ? undefined
+                                        [question.code]: e.target.value === ''
+                                          ? null
                                           : Number(e.target.value)
                                       })}
                                     />
                                   </label>
                                 )}
 
-                                {!auto && (
-                                  <p className="manual-review">
-                                    Wymaga oceny urzędu — DotacjaPRO nie przyznaje tu punktów automatycznie.
-                                  </p>
+                                {question.inputType === 'EVIDENCE' && (
+                                  <>
+                                    <label>
+                                      Informacja / dowód do oceny
+                                      <textarea
+                                        rows={3}
+                                        value={
+                                          typeof criterionAnswers[question.code] === 'string'
+                                            ? criterionAnswers[question.code] as string
+                                            : ''
+                                        }
+                                        onChange={(e) => setCriterionAnswers({
+                                          ...criterionAnswers,
+                                          [question.code]: e.target.value || null
+                                        })}
+                                        placeholder="Wpisz informację pomocną do późniejszej weryfikacji"
+                                      />
+                                    </label>
+                                    <p className="manual-review">
+                                      To kryterium nie otrzyma punktów automatycznie. Wymaga oceny zgodnej z zasadami urzędu.
+                                    </p>
+                                  </>
                                 )}
                               </div>
-                            );
-                          })}
-                        </div>
+                            ))}
 
-                        <button
-                          onClick={() => assessCriteria(call.localCriteria!.id)}
-                          disabled={busy}
-                        >
-                          {busy ? 'Liczenie…' : 'Policz bezpieczny zakres punktów'}
-                        </button>
+                            <button
+                              onClick={() => assessCriteria(call.localCriteria!.id)}
+                              disabled={busy || criterionQuestions.length === 0}
+                            >
+                              {busy ? 'Liczenie…' : 'Policz zweryfikowaną część punktacji'}
+                            </button>
 
-                        {criterionAssessment && (
-                          <div className="assessment">
-                            <span className="qualification-status">
-                              {assessmentLabel(criterionAssessment.status)}
-                            </span>
-                            <h3>
-                              {criterionAssessment.possiblePointsRange.minimum}
-                              {'–'}
-                              {criterionAssessment.possiblePointsRange.maximum} pkt
-                            </h3>
-                            <p>
-                              Potwierdzone automatycznie: {criterionAssessment.confirmedPoints} pkt.
-                              {' '}
-                              Do oceny pozostaje maksymalnie {criterionAssessment.unresolvedMaxPoints} pkt.
-                            </p>
-                            {criterionAssessment.minimumPoints !== null && (
-                              <p>Próg: {criterionAssessment.minimumPoints} pkt.</p>
+                            {criterionAssessment && (
+                              <div className="assessment">
+                                <span className="qualification-status">
+                                  {assessmentLabel(criterionAssessment.status)}
+                                </span>
+                                <h3>
+                                  {criterionAssessment.knownPoints} pkt potwierdzonych
+                                </h3>
+                                <p>{criterionAssessment.summary}</p>
+                                <p>
+                                  Maksymalnie możliwe po rozstrzygnięciu pozostałych kryteriów:
+                                  {' '}
+                                  {criterionAssessment.possiblePoints} pkt.
+                                </p>
+                                {criterionAssessment.minimumPoints !== null && (
+                                  <p>Opublikowany próg: {criterionAssessment.minimumPoints} pkt.</p>
+                                )}
+                                {criterionAssessment.blockingFailures.length > 0 && (
+                                  <p className="warning">
+                                    Niespełnione kryteria blokujące:
+                                    {' '}
+                                    {criterionAssessment.blockingFailures.join(', ')}
+                                  </p>
+                                )}
+                                {criterionAssessment.unresolvedCriteria.length > 0 && (
+                                  <p className="warning">
+                                    Do dalszej oceny:
+                                    {' '}
+                                    {criterionAssessment.unresolvedCriteria.join(', ')}
+                                  </p>
+                                )}
+
+                                <div className="assessment-details">
+                                  {criterionAssessment.results.map((item) => (
+                                    <p key={item.code}>
+                                      <strong>{item.title}:</strong>
+                                      {' '}
+                                      {item.points === null ? 'bez automatycznej punktacji' : `${item.points} pkt`}
+                                      {' — '}
+                                      {item.reason}
+                                    </p>
+                                  ))}
+                                </div>
+                              </div>
                             )}
-                            {criterionAssessment.triggeredBlockers.length > 0 && (
-                              <p className="warning">
-                                Reguła blokująca: {criterionAssessment.triggeredBlockers.map((item) => item.title).join(', ')}
-                              </p>
-                            )}
-                            {criterionAssessment.unresolvedBlockers.length > 0 && (
-                              <p className="warning">
-                                Nierozstrzygnięte kryteria blokujące: {criterionAssessment.unresolvedBlockers.map((item) => item.title).join(', ')}
-                              </p>
-                            )}
-                            <p className="assessment-note">{criterionAssessment.disclaimer}</p>
                           </div>
                         )}
                       </div>
