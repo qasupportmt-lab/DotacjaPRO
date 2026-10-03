@@ -489,3 +489,17 @@ model DocumentPackageJob {
   @@index([status, requestedAt])
   @@index([caseId, requestedAt])
 }
+
+
+model StoredObject {
+  id         String   @id @default(cuid())
+  storageKey String   @unique
+  mimeType   String
+  sha256     String
+  sizeBytes  Int
+  content    Bytes
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+  @@index([sha256])
+  @@index([createdAt])
+}
