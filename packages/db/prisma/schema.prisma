@@ -111,6 +111,13 @@ model Source {
   trustLevel    String
   enabled       Boolean  @default(true)
   checkedAt     DateTime?
+  contentHash   String?
+  etag          String?
+  lastModified  String?
+  lastStatusCode Int?
+  scopeVoivodeship String?
+  scopeCounty      String?
+  scopeMunicipality String?
   documents     SourceDocument[]
 }
 
