@@ -18,6 +18,7 @@ import {
   sendEmailVerificationCode
 } from './email/mailer.js';
 import { generateEmailCode, hashEmailCode, emailCodeMatches } from './security/email-code.js';
+import { hashPassword, passwordMatches } from './security/password.js';
 
 const app = Fastify({ logger: true, bodyLimit: 35 * 1024 * 1024 });
 
@@ -319,8 +320,11 @@ function configuredAdminTelegramIds() {
   );
 }
 
-function isAdminTelegramUserId(telegramUserId: string) {
-  return configuredAdminTelegramIds().has(telegramUserId);
+function isAdminTelegramUserId(telegramUserId: string | null | undefined) {
+  return Boolean(
+    telegramUserId &&
+    configuredAdminTelegramIds().has(telegramUserId)
+  );
 }
 
 async function requireAdminUserId(request: FastifyRequest) {
@@ -700,6 +704,195 @@ app.get('/v1/locations/search', async (request, reply) => {
   return { items };
 });
 
+const webCredentialsSchema = z.object({
+  email: z.string()
+    .email()
+    .max(320)
+    .transform((value) => value.trim().toLowerCase()),
+  password: z.string().min(10).max(128),
+  firstName: z.string().trim().min(1).max(120).optional()
+});
+
+function userAuthView(user: {
+  id: string;
+  email: string | null;
+  emailVerifiedAt: Date | null;
+  telegramUserId: string | null;
+  telegramFirstName: string | null;
+  telegramUsername: string | null;
+  webPasswordHash: string | null;
+}) {
+  return {
+    id: user.id,
+    email: user.email,
+    emailVerified: Boolean(user.emailVerifiedAt),
+    firstName: user.telegramFirstName,
+    username: user.telegramUsername,
+    authMethods: {
+      web: Boolean(user.webPasswordHash),
+      telegram: Boolean(user.telegramUserId)
+    },
+    isAdmin: isAdminTelegramUserId(user.telegramUserId)
+  };
+}
+
+app.post('/v1/auth/web/register', async (request, reply) => {
+  const parsed = webCredentialsSchema.safeParse(request.body);
+  if (!parsed.success) {
+    return reply.code(400).send({
+      error: 'INVALID_WEB_REGISTRATION',
+      details: parsed.error.flatten()
+    });
+  }
+
+  const { email, password, firstName } = parsed.data;
+  const existing = await prisma.user.findUnique({
+    where: { email },
+    select: { id: true, webPasswordHash: true }
+  });
+
+  if (existing) {
+    return reply.code(409).send({
+      error: existing.webPasswordHash
+        ? 'ACCOUNT_ALREADY_EXISTS'
+        : 'ACCOUNT_REQUIRES_LINKING'
+    });
+  }
+
+  const webPasswordHash = await hashPassword(password);
+  const user = await prisma.user.create({
+    data: {
+      email,
+      webPasswordHash,
+      telegramFirstName: firstName ?? null,
+      preferredLanguage: 'pl',
+      profile: { create: {} },
+      fundingProfile: { create: {} },
+      notificationPreference: { create: {} }
+    },
+    select: {
+      id: true,
+      email: true,
+      emailVerifiedAt: true,
+      telegramUserId: true,
+      telegramFirstName: true,
+      telegramUsername: true,
+      webPasswordHash: true
+    }
+  });
+
+  const token = await createSessionToken(user.id);
+
+  return reply.code(201).send({
+    token,
+    user: userAuthView(user)
+  });
+});
+
+app.post('/v1/auth/web/login', async (request, reply) => {
+  const parsed = webCredentialsSchema
+    .omit({ firstName: true })
+    .safeParse(request.body);
+
+  if (!parsed.success) {
+    return reply.code(400).send({ error: 'INVALID_WEB_LOGIN' });
+  }
+
+  const user = await prisma.user.findUnique({
+    where: { email: parsed.data.email },
+    select: {
+      id: true,
+      email: true,
+      emailVerifiedAt: true,
+      telegramUserId: true,
+      telegramFirstName: true,
+      telegramUsername: true,
+      webPasswordHash: true
+    }
+  });
+
+  if (
+    !user?.webPasswordHash ||
+    !(await passwordMatches(parsed.data.password, user.webPasswordHash))
+  ) {
+    return reply.code(401).send({ error: 'INVALID_CREDENTIALS' });
+  }
+
+  const token = await createSessionToken(user.id);
+  return {
+    token,
+    user: userAuthView(user)
+  };
+});
+
+app.get('/v1/auth/session', async (request, reply) => {
+  let userId: string;
+  try {
+    userId = await requireUserId(request);
+  } catch {
+    return reply.code(401).send({ error: 'INVALID_SESSION' });
+  }
+
+  const user = await prisma.user.findUnique({
+    where: { id: userId },
+    select: {
+      id: true,
+      email: true,
+      emailVerifiedAt: true,
+      telegramUserId: true,
+      telegramFirstName: true,
+      telegramUsername: true,
+      webPasswordHash: true
+    }
+  });
+
+  if (!user) return reply.code(401).send({ error: 'INVALID_SESSION' });
+  return { user: userAuthView(user) };
+});
+
+app.put('/v1/me/web-credentials', async (request, reply) => {
+  const userId = await requireUserId(request);
+  const parsed = webCredentialsSchema.safeParse(request.body);
+  if (!parsed.success) {
+    return reply.code(400).send({ error: 'INVALID_WEB_CREDENTIALS' });
+  }
+
+  const conflict = await prisma.user.findFirst({
+    where: {
+      email: parsed.data.email,
+      NOT: { id: userId }
+    },
+    select: { id: true }
+  });
+
+  if (conflict) {
+    return reply.code(409).send({ error: 'EMAIL_ALREADY_IN_USE' });
+  }
+
+  const webPasswordHash = await hashPassword(parsed.data.password);
+  const user = await prisma.user.update({
+    where: { id: userId },
+    data: {
+      email: parsed.data.email,
+      webPasswordHash,
+      ...(parsed.data.firstName
+        ? { telegramFirstName: parsed.data.firstName }
+        : {})
+    },
+    select: {
+      id: true,
+      email: true,
+      emailVerifiedAt: true,
+      telegramUserId: true,
+      telegramFirstName: true,
+      telegramUsername: true,
+      webPasswordHash: true
+    }
+  });
+
+  return { user: userAuthView(user) };
+});
+
 const authSchema = z.object({
   initData: z.string().min(10)
 });
@@ -756,6 +949,62 @@ app.post('/v1/auth/telegram', async (request, reply) => {
   } catch (error) {
     request.log.warn({ error }, 'Telegram auth failed');
     return reply.code(401).send({ error: 'TELEGRAM_AUTH_FAILED' });
+  }
+});
+
+
+const telegramLinkSchema = z.object({
+  initData: z.string().min(10)
+});
+
+app.post('/v1/auth/telegram/link', async (request, reply) => {
+  const userId = await requireUserId(request);
+  const parsed = telegramLinkSchema.safeParse(request.body);
+  if (!parsed.success) {
+    return reply.code(400).send({ error: 'INVALID_REQUEST' });
+  }
+
+  const botToken = process.env.TELEGRAM_BOT_TOKEN;
+  if (!botToken) return reply.code(503).send({ error: 'BOT_NOT_CONFIGURED' });
+
+  try {
+    const telegram = validateTelegramInitData(parsed.data.initData, botToken);
+    const t = telegram.user;
+    const telegramUserId = String(t.id);
+
+    const existing = await prisma.user.findUnique({
+      where: { telegramUserId },
+      select: { id: true }
+    });
+
+    if (existing && existing.id !== userId) {
+      return reply.code(409).send({ error: 'TELEGRAM_ALREADY_LINKED' });
+    }
+
+    const user = await prisma.user.update({
+      where: { id: userId },
+      data: {
+        telegramUserId,
+        telegramUsername: t.username ?? null,
+        telegramFirstName: t.first_name,
+        telegramLastName: t.last_name ?? null,
+        preferredLanguage: t.language_code ?? 'pl'
+      },
+      select: {
+        id: true,
+        email: true,
+        emailVerifiedAt: true,
+        telegramUserId: true,
+        telegramFirstName: true,
+        telegramUsername: true,
+        webPasswordHash: true
+      }
+    });
+
+    return { user: userAuthView(user) };
+  } catch (error) {
+    request.log.warn({ error }, 'Telegram link failed');
+    return reply.code(401).send({ error: 'TELEGRAM_LINK_FAILED' });
   }
 });
 
