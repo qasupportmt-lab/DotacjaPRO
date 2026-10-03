@@ -694,7 +694,16 @@ app.get('/v1/me/dashboard', async (request) => {
       profile: true,
       fundingProfile: true,
       notificationPreference: true,
-      cases: { orderBy: { updatedAt: 'desc' }, take: 10 },
+      cases: {
+        orderBy: { updatedAt: 'desc' },
+        take: 10,
+        include: {
+          qualifications: {
+            orderBy: { createdAt: 'desc' },
+            take: 1
+          }
+        }
+      },
       notifications: {
         where: { sentAt: null },
         orderBy: [{ priority: 'asc' }, { scheduledAt: 'asc' }],
@@ -1911,6 +1920,221 @@ app.post('/v1/internal/teryt/import', async (request, reply) => {
     municipalitiesUpserted,
     localitiesUpserted,
     sourceVersion: parsed.data.sourceVersion ?? null
+  };
+});
+
+
+const verifyChangeSchema = z.object({
+  verified: z.boolean(),
+  verificationScore: z.number().int().min(0).max(100).optional()
+});
+
+app.post('/v1/internal/change-events/:id/verify', async (request, reply) => {
+  requireWorkerSecret(request);
+  const id = (request.params as { id: string }).id;
+  const parsed = verifyChangeSchema.safeParse(request.body);
+
+  if (!parsed.success) {
+    return reply.code(400).send({ error: 'INVALID_CHANGE_VERIFICATION' });
+  }
+
+  const event = await prisma.changeEvent.findUnique({ where: { id } });
+  if (!event) {
+    return reply.code(404).send({ error: 'CHANGE_EVENT_NOT_FOUND' });
+  }
+
+  const updated = await prisma.changeEvent.update({
+    where: { id },
+    data: {
+      verified: parsed.data.verified,
+      verificationScore: parsed.data.verificationScore ?? null,
+      verifiedAt: parsed.data.verified ? new Date() : null,
+      requalificationProcessedAt: null
+    }
+  });
+
+  return { event: updated };
+});
+
+function qualificationContextFor(
+  profile: {
+    voivodeship: string | null;
+    municipality: string | null;
+    regionVerified: boolean;
+    pupOfficeId: string | null;
+  } | null,
+  funding: {
+    employmentStatus: string | null;
+    wantsToStartBusiness: boolean | null;
+    businessActiveLast12Months: boolean | null;
+    priorNonRepayableStartupAid: boolean | null;
+  } | null
+) {
+  return {
+    employmentStatus: funding?.employmentStatus,
+    wantsToStartBusiness: funding?.wantsToStartBusiness,
+    voivodeship: profile?.voivodeship,
+    municipality: profile?.municipality,
+    regionVerified: profile?.regionVerified,
+    pupOfficeId: profile?.pupOfficeId,
+    businessActiveLast12Months: funding?.businessActiveLast12Months,
+    priorNonRepayableStartupAid: funding?.priorNonRepayableStartupAid
+  };
+}
+
+app.post('/v1/internal/requalify-verified-changes', async (request) => {
+  requireWorkerSecret(request);
+
+  const events = await prisma.changeEvent.findMany({
+    where: {
+      verified: true,
+      requalificationProcessedAt: null
+    },
+    orderBy: { detectedAt: 'asc' },
+    take: 100
+  });
+
+  let snapshotsCreated = 0;
+  let alertsCreated = 0;
+  let casesChecked = 0;
+
+  for (const event of events) {
+    const source = event.sourceId
+      ? await prisma.source.findUnique({
+          where: { id: event.sourceId },
+          include: { institution: true }
+        })
+      : null;
+
+    const cases = await prisma.case.findMany({
+      where: {
+        status: {
+          notIn: ['CLOSED', 'REJECTED', 'SUBMITTED']
+        }
+      },
+      include: {
+        user: {
+          include: {
+            profile: true,
+            fundingProfile: true
+          }
+        },
+        qualifications: {
+          orderBy: { createdAt: 'desc' },
+          take: 1
+        }
+      }
+    });
+
+    for (const item of cases) {
+      const profile = item.user.profile;
+      if (!profile) continue;
+
+      if (!eventAppliesToRegion(event.payload, profile)) {
+        continue;
+      }
+
+      if (
+        source?.institution?.type === 'PUP' &&
+        source.institutionId &&
+        profile.pupOfficeId !== source.institutionId
+      ) {
+        continue;
+      }
+
+      casesChecked++;
+
+      const previous = item.qualifications[0];
+      const qualification = qualifyPupStartup(
+        qualificationContextFor(profile, item.user.fundingProfile)
+      );
+
+      const result = {
+        engineVersion: QUALIFICATION_ENGINE_VERSION,
+        generatedAt: new Date().toISOString(),
+        caseId: item.id,
+        trigger: {
+          changeEventId: event.id,
+          sourceId: event.sourceId,
+          changeType: event.changeType
+        },
+        paths: [qualification]
+      };
+
+      const snapshot = await prisma.qualificationSnapshot.create({
+        data: {
+          caseId: item.id,
+          status: qualification.status,
+          engineVersion: QUALIFICATION_ENGINE_VERSION,
+          resultJson: result as never,
+          sourceRefs: qualification.sourceRefs as never
+        }
+      });
+      snapshotsCreated++;
+
+      if (previous && previous.status !== qualification.status) {
+        const dedupeKey = `qualification-change:${event.id}:${item.id}`;
+
+        await prisma.notification.upsert({
+          where: {
+            userId_dedupeKey: {
+              userId: item.userId,
+              dedupeKey
+            }
+          },
+          update: {
+            category: 'QUALIFICATION_CHANGE',
+            priority: qualification.status === 'NOT_MATCH_THIS_PATH' ? 'P1' : 'P2',
+            title: 'Zmiana w kwalifikacji sprawy',
+            body: `Po zweryfikowanej zmianie oficjalnego źródła wynik tej ścieżki zmienił się z ${previous.status} na ${qualification.status}. Otwórz sprawę, aby zobaczyć powód i źródło.`,
+            changeEventId: event.id,
+            scheduledAt: new Date(),
+            failedAt: null,
+            failureReason: null
+          },
+          create: {
+            userId: item.userId,
+            category: 'QUALIFICATION_CHANGE',
+            priority: qualification.status === 'NOT_MATCH_THIS_PATH' ? 'P1' : 'P2',
+            title: 'Zmiana w kwalifikacji sprawy',
+            body: `Po zweryfikowanej zmianie oficjalnego źródła wynik tej ścieżki zmienił się z ${previous.status} na ${qualification.status}. Otwórz sprawę, aby zobaczyć powód i źródło.`,
+            changeEventId: event.id,
+            scheduledAt: new Date(),
+            dedupeKey
+          }
+        });
+
+        alertsCreated++;
+      }
+
+      await prisma.auditEvent.create({
+        data: {
+          userId: item.userId,
+          actorType: 'SYSTEM',
+          action: 'CASE_REQUALIFIED_AFTER_VERIFIED_CHANGE',
+          entity: 'QualificationSnapshot',
+          entityId: snapshot.id,
+          metadata: {
+            caseId: item.id,
+            changeEventId: event.id,
+            previousStatus: previous?.status ?? null,
+            currentStatus: qualification.status
+          }
+        }
+      });
+    }
+
+    await prisma.changeEvent.update({
+      where: { id: event.id },
+      data: { requalificationProcessedAt: new Date() }
+    });
+  }
+
+  return {
+    eventsProcessed: events.length,
+    casesChecked,
+    snapshotsCreated,
+    alertsCreated
   };
 });
 
