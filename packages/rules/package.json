@@ -5,10 +5,12 @@
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "lint": "echo 'lint rules'"
+    "lint": "echo 'lint rules'",
+    "test": "tsx --test tests/**/*.test.ts"
   },
   "devDependencies": {
-    "typescript": "^5.9.2"
+    "typescript": "^5.9.2",
+    "tsx": "^4.20.6"
   },
   "main": "src/index.ts",
   "exports": {
