@@ -1041,7 +1041,8 @@ export default function Home() {
           setQualification({
             status: firstPath.status,
             summary: firstPath.summary,
-            activeCalls: firstPath.activeCalls ?? []
+            activeCalls: firstPath.activeCalls ?? [],
+            programCandidates: result.programCandidates ?? []
           });
         }
       }
