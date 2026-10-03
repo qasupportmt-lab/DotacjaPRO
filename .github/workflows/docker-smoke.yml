@@ -5,6 +5,7 @@ on:
     branches: [main]
     paths:
       - "deploy/**"
+      - "apps/miniapp/**"
       - "apps/api/**"
       - "apps/bot/**"
       - "services/update-engine/**"
@@ -26,6 +27,8 @@ jobs:
       fail-fast: false
       matrix:
         include:
+          - name: miniapp
+            file: deploy/miniapp.Dockerfile
           - name: api
             file: deploy/api.Dockerfile
           - name: bot
