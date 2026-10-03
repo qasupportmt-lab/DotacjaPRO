@@ -7,6 +7,7 @@ from contextlib import asynccontextmanager
 import httpx
 from fastapi import FastAPI, Header, HTTPException
 
+from .analyzers.dispatch import analyze_official_document
 from .renderers.dispatch import (
     UnsupportedOfficialFormFormat,
     render_official_document,
@@ -174,11 +175,90 @@ async def work_once() -> dict:
             }
 
 
+
+async def claim_analysis(client: httpx.AsyncClient) -> str | None:
+    response = await client.post(
+        f"{API_BASE_URL}/v1/internal/templates/claim-analysis",
+        headers=worker_headers(),
+    )
+    response.raise_for_status()
+    template = response.json().get("template")
+    return template.get("id") if template else None
+
+
+async def analyze_once() -> dict:
+    async with httpx.AsyncClient(timeout=60.0) as client:
+        template_id = await claim_analysis(client)
+        if not template_id:
+            return {"processed": False, "templateId": None}
+
+        try:
+            response = await client.get(
+                f"{API_BASE_URL}/v1/internal/templates/{template_id}/analysis-payload",
+                headers=worker_headers(),
+            )
+            response.raise_for_status()
+            payload = response.json()
+            source = payload["source"]
+
+            source_bytes = get_bytes(source["storageKey"])
+            actual_hash = hashlib.sha256(source_bytes).hexdigest()
+            if actual_hash != source["sha256"]:
+                raise RuntimeError(
+                    "SOURCE_HASH_MISMATCH: immutable official source differs from registry"
+                )
+
+            proposal = analyze_official_document(
+                source=source_bytes,
+                original_name=source["originalName"],
+                mime_type=source["mimeType"],
+            )
+
+            save = await client.put(
+                f"{API_BASE_URL}/v1/internal/templates/{template_id}/mappings",
+                headers={**worker_headers(), "Content-Type": "application/json"},
+                json={
+                    "mappingStatus": "DRAFT",
+                    "analysis": proposal["analysis"],
+                    "mappings": proposal["mappings"],
+                },
+            )
+            save.raise_for_status()
+
+            return {
+                "processed": True,
+                "success": True,
+                "templateId": template_id,
+                "candidateFields": len(proposal["mappings"]),
+            }
+        except Exception as exc:
+            message = str(exc)[:4000] or "FORM_ANALYSIS_FAILED"
+            try:
+                await client.post(
+                    f"{API_BASE_URL}/v1/internal/templates/{template_id}/analysis-failed",
+                    headers={**worker_headers(), "Content-Type": "application/json"},
+                    json={"error": message},
+                )
+            except Exception:
+                pass
+
+            return {
+                "processed": True,
+                "success": False,
+                "templateId": template_id,
+                "error": message,
+            }
+
+
 async def worker_loop() -> None:
     while not _stop_event.is_set():
         try:
-            result = await work_once()
-            delay = 0.25 if result.get("processed") else POLL_SECONDS
+            render_result = await work_once()
+            if render_result.get("processed"):
+                delay = 0.25
+            else:
+                analysis_result = await analyze_once()
+                delay = 0.25 if analysis_result.get("processed") else POLL_SECONDS
         except Exception:
             delay = POLL_SECONDS
 
@@ -222,3 +302,11 @@ async def run_once(
 ):
     verify_worker_secret(x_worker_secret)
     return await work_once()
+
+
+@app.post("/analyze-once")
+async def run_analysis_once(
+    x_worker_secret: str | None = Header(default=None),
+):
+    verify_worker_secret(x_worker_secret)
+    return await analyze_once()
