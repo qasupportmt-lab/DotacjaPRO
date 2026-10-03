@@ -24,6 +24,7 @@ model User {
   cases                 Case[]
   notifications         Notification[]
   auditEvents           AuditEvent[]
+  emailVerifications    EmailVerification[]
 }
 
 model UserProfile {
@@ -262,4 +263,18 @@ model AuditEvent {
   metadata  Json?
   createdAt DateTime @default(now())
   @@index([entity, entityId, createdAt])
+}
+
+
+model EmailVerification {
+  id         String   @id @default(cuid())
+  userId     String
+  user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  email      String
+  codeHash   String
+  expiresAt  DateTime
+  attempts   Int      @default(0)
+  consumedAt DateTime?
+  createdAt  DateTime @default(now())
+  @@index([userId, email, createdAt])
 }
