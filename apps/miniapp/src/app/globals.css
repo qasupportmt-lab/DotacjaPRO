@@ -62,3 +62,7 @@ button:disabled { opacity: .45; cursor: default; }
 .assessment p { font-size: 13px; margin: 7px 0; }
 .assessment-note { padding-top: 9px; border-top: 1px solid var(--line); font-size: 11px !important; }
 .muted-box { margin-top: 14px; border: 1px dashed var(--line); border-radius: 13px; padding: 12px; font-size: 12px; }
+
+.criterion-flags { display: flex; flex-wrap: wrap; gap: 7px; margin-top: 9px; }
+.criterion-flags span { display: inline-flex; align-items: center; min-height: 24px; padding: 4px 8px; border-radius: 999px; border: 1px solid var(--line); color: var(--muted); font-size: 10px; font-weight: 800; letter-spacing: .03em; }
+.criterion-flags .warning-chip { color: #ffd49a; border-color: rgba(255,212,154,.34); }
