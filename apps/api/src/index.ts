@@ -6,6 +6,8 @@ import { prisma } from '@dotacjapro/db';
 import { validateTelegramInitData } from './security/telegram.js';
 import { createSessionToken, verifySessionToken } from './security/session.js';
 import { VOIVODESHIPS } from './data/voivodeships.js';
+import { sendEmailVerificationCode } from './email/mailer.js';
+import { generateEmailCode, hashEmailCode, emailCodeMatches } from './security/email-code.js';
 
 const app = Fastify({ logger: true });
 
@@ -96,6 +98,88 @@ app.post('/v1/auth/telegram', async (request, reply) => {
     request.log.warn({ error }, 'Telegram auth failed');
     return reply.code(401).send({ error: 'TELEGRAM_AUTH_FAILED' });
   }
+});
+
+
+const emailStartSchema = z.object({
+  email: z.string().email().max(320).transform((value) => value.trim().toLowerCase())
+});
+
+app.post('/v1/me/email/start', async (request, reply) => {
+  const userId = await requireUserId(request);
+  const parsed = emailStartSchema.safeParse(request.body);
+  if (!parsed.success) return reply.code(400).send({ error: 'INVALID_EMAIL' });
+
+  const email = parsed.data.email;
+  const existing = await prisma.user.findFirst({
+    where: { email, NOT: { id: userId } },
+    select: { id: true }
+  });
+  if (existing) return reply.code(409).send({ error: 'EMAIL_ALREADY_IN_USE' });
+
+  const code = generateEmailCode();
+  const codeHash = hashEmailCode(email, code);
+  const expiresAt = new Date(Date.now() + 10 * 60 * 1000);
+
+  await prisma.emailVerification.create({
+    data: { userId, email, codeHash, expiresAt }
+  });
+
+  try {
+    await sendEmailVerificationCode(email, code);
+  } catch (error) {
+    request.log.error({ error }, 'Email verification delivery failed');
+    return reply.code(503).send({ error: 'EMAIL_DELIVERY_FAILED' });
+  }
+
+  return { status: 'CODE_SENT', expiresInSeconds: 600 };
+});
+
+const emailConfirmSchema = z.object({
+  email: z.string().email().max(320).transform((value) => value.trim().toLowerCase()),
+  code: z.string().regex(/^\d{6}$/)
+});
+
+app.post('/v1/me/email/confirm', async (request, reply) => {
+  const userId = await requireUserId(request);
+  const parsed = emailConfirmSchema.safeParse(request.body);
+  if (!parsed.success) return reply.code(400).send({ error: 'INVALID_CODE' });
+
+  const { email, code } = parsed.data;
+  const record = await prisma.emailVerification.findFirst({
+    where: { userId, email, consumedAt: null },
+    orderBy: { createdAt: 'desc' }
+  });
+
+  if (!record) return reply.code(404).send({ error: 'VERIFICATION_NOT_FOUND' });
+  if (record.expiresAt < new Date()) return reply.code(410).send({ error: 'CODE_EXPIRED' });
+  if (record.attempts >= 5) return reply.code(429).send({ error: 'TOO_MANY_ATTEMPTS' });
+
+  if (!emailCodeMatches(email, code, record.codeHash)) {
+    await prisma.emailVerification.update({
+      where: { id: record.id },
+      data: { attempts: { increment: 1 } }
+    });
+    return reply.code(400).send({ error: 'INVALID_CODE' });
+  }
+
+  try {
+    await prisma.$transaction([
+      prisma.emailVerification.update({
+        where: { id: record.id },
+        data: { consumedAt: new Date() }
+      }),
+      prisma.user.update({
+        where: { id: userId },
+        data: { email, emailVerifiedAt: new Date() }
+      })
+    ]);
+  } catch (error) {
+    request.log.warn({ error }, 'Email confirmation conflict');
+    return reply.code(409).send({ error: 'EMAIL_ALREADY_IN_USE' });
+  }
+
+  return { status: 'VERIFIED', email };
 });
 
 const regionSchema = z.object({
