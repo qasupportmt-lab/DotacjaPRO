@@ -41,6 +41,10 @@ model UserProfile {
   lgdId          String?
   regionVerified Boolean @default(false)
   regionSource   String?
+  terytMunicipalityCode String?
+  terytLocalityCode     String?
+  terytVerified         Boolean @default(false)
+  terytVerifiedAt       DateTime?
 }
 
 model FundingProfile {
@@ -213,6 +217,7 @@ model Case {
   answers            CaseAnswer[]
   documents          CaseDocument[]
   renderJobs          DocumentRenderJob[]
+  qualifications      QualificationSnapshot[]
   @@index([userId, status])
 }
 
@@ -319,4 +324,50 @@ model DocumentRenderJob {
   completedAt      DateTime?
   @@index([status, requestedAt])
   @@index([caseId, templateId])
+}
+
+
+model TerytMunicipality {
+  id                   String   @id @default(cuid())
+  tercCode              String   @unique
+  voivodeshipCode       String
+  voivodeship           String
+  countyCode            String?
+  county                String?
+  municipalityCode      String?
+  municipality          String
+  municipalityTypeCode  String?
+  municipalityType      String?
+  validFrom              DateTime?
+  validTo                DateTime?
+  sourceKind             String   @default("TERYT_WS1")
+  sourceUpdatedAt        DateTime
+  sourceVersion          String?
+  localities             TerytLocality[]
+  @@index([voivodeship, municipality])
+  @@index([county, municipality])
+}
+
+model TerytLocality {
+  id                   String   @id @default(cuid())
+  simcCode             String   @unique
+  name                 String
+  localityType         String?
+  municipalityTercCode String
+  municipality         TerytMunicipality @relation(fields: [municipalityTercCode], references: [tercCode], onDelete: Cascade)
+  sourceUpdatedAt      DateTime
+  sourceVersion        String?
+  @@index([name, municipalityTercCode])
+}
+
+model QualificationSnapshot {
+  id            String   @id @default(cuid())
+  caseId        String
+  case          Case     @relation(fields: [caseId], references: [id], onDelete: Cascade)
+  status        String
+  engineVersion String
+  resultJson    Json
+  sourceRefs    Json?
+  createdAt     DateTime @default(now())
+  @@index([caseId, createdAt])
 }
