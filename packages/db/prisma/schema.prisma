@@ -130,6 +130,7 @@ model Source {
   scopeMunicipality String?
   documents     SourceDocument[]
   fundingCalls   FundingCall[]
+  @@index([institutionId])
 }
 
 model SourceDocument {
@@ -172,6 +173,7 @@ model OfficialFormTemplate {
   fundingCall      FundingCall? @relation(fields: [fundingCallId], references: [id], onDelete: SetNull)
   @@index([institutionId, programCode, active])
   @@index([fundingCallId, active])
+  @@index([sourceDocumentId])
 }
 
 model FormFieldMapping {
@@ -217,6 +219,7 @@ model FundingCall {
   submissionInstructions SubmissionInstructionVersion[]
   @@index([status, opensAt, closesAt])
   @@index([verificationStatus, verifiedAt])
+  @@index([institutionId])
 }
 
 model Case {
@@ -239,6 +242,7 @@ model Case {
   criterionAssessments CriterionAssessmentSnapshot[]
   packageJobs          DocumentPackageJob[]
   @@index([userId, status])
+  @@index([fundingCallId])
 }
 
 model CaseAnswer {
@@ -264,6 +268,7 @@ model CaseDocument {
   sourceDocumentId String?
   renderJobId      String?  @unique
   createdAt        DateTime @default(now())
+  @@index([caseId])
 }
 
 model ChangeEvent {
@@ -311,6 +316,7 @@ model AuditEvent {
   metadata  Json?
   createdAt DateTime @default(now())
   @@index([entity, entityId, createdAt])
+  @@index([userId])
 }
 
 
@@ -346,6 +352,7 @@ model DocumentRenderJob {
   completedAt      DateTime?
   @@index([status, requestedAt])
   @@index([caseId, templateId])
+  @@index([templateId])
 }
 
 
@@ -380,6 +387,7 @@ model TerytLocality {
   sourceUpdatedAt      DateTime
   sourceVersion        String?
   @@index([name, municipalityTercCode])
+  @@index([municipalityTercCode])
 }
 
 model QualificationSnapshot {
@@ -488,6 +496,7 @@ model DocumentPackageJob {
   completedAt             DateTime?
   @@index([status, requestedAt])
   @@index([caseId, requestedAt])
+  @@index([submissionInstructionId])
 }
 
 
