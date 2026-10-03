@@ -1029,7 +1029,17 @@ app.put('/v1/me/funding-profile', async (request, reply) => {
 });
 
 const caseSchema = z.object({
-  caseType: z.enum(['START_BUSINESS', 'PUP_STARTUP', 'EU_STARTUP', 'LGD_STARTUP', 'PFRON_STARTUP', 'BUSINESS_DEVELOPMENT'])
+  caseType: z.enum([
+    'START_BUSINESS',
+    'PUP_STARTUP',
+    'EU_STARTUP',
+    'LGD_STARTUP',
+    'PFRON_STARTUP',
+    'BGK_SELF_EMPLOYMENT',
+    'ARIMR_WPR',
+    'BUSINESS_DEVELOPMENT'
+  ]),
+  programCode: z.string().min(1).max(80).optional()
 });
 
 app.post('/v1/cases', async (request, reply) => {
@@ -1037,11 +1047,37 @@ app.post('/v1/cases', async (request, reply) => {
   const parsed = caseSchema.safeParse(request.body);
   if (!parsed.success) return reply.code(400).send({ error: 'INVALID_CASE' });
 
+  const program = parsed.data.programCode
+    ? await prisma.fundingProgram.findFirst({
+        where: {
+          code: parsed.data.programCode,
+          active: true
+        },
+        select: { id: true, code: true }
+      })
+    : null;
+
+  if (parsed.data.programCode && !program) {
+    return reply.code(400).send({ error: 'UNKNOWN_OR_INACTIVE_PROGRAM' });
+  }
+
   const item = await prisma.case.create({
     data: {
       userId,
       status: 'QUALIFICATION',
-      caseType: parsed.data.caseType
+      caseType: parsed.data.caseType,
+      programId: program?.id
+    },
+    include: {
+      program: {
+        select: {
+          id: true,
+          code: true,
+          name: true,
+          category: true,
+          financingType: true
+        }
+      }
     }
   });
 
