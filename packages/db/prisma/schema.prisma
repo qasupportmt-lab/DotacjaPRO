@@ -159,6 +159,7 @@ model OfficialFormTemplate {
   versionLabel     String?
   active           Boolean @default(true)
   officialOnly     Boolean @default(true)
+  requiredForPackage Boolean @default(true)
   mappingStatus    String  @default("UNMAPPED")
   mappingVerifiedAt DateTime?
   mappingAnalyzedAt DateTime?
