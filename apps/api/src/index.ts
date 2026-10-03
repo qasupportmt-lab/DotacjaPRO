@@ -3643,7 +3643,7 @@ app.post('/v1/internal/submission-instructions/:id/verify', async (request, repl
     where: { id },
     data: {
       instructionJson: parsed.data.instruction === undefined
-        ? existing.instructionJson
+        ? existing.instructionJson as never
         : parsed.data.instruction as never,
       status: 'VERIFIED',
       verifiedAt: new Date()
