@@ -270,6 +270,7 @@ export interface LocalCriterionQuestion {
   description?: string | null;
   inputType: 'BOOLEAN' | 'SELECT' | 'NUMBER' | 'EVIDENCE';
   required: boolean;
+  failIfZero: boolean;
   maxPoints?: number | null;
   evidenceHint?: string | null;
   options?: Array<{ value: string; label: string }>;
@@ -641,6 +642,7 @@ export function buildLocalCriterionQuestions(
       title: scoring?.question ?? criterion.title,
       description: criterion.description,
       required: scoring?.required ?? true,
+      failIfZero: Boolean(criterion.failIfZero),
       maxPoints: criterion.maxPoints,
       evidenceHint: criterion.evidenceHint
     };
