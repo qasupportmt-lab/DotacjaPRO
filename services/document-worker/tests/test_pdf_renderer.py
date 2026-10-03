@@ -18,7 +18,7 @@ def make_acroform_pdf() -> bytes:
     stream = BytesIO()
     c = canvas.Canvas(stream, pagesize=(300, 300))
     c.drawString(30, 270, "Imie:")
-    c.acroform.textfield(
+    c.acroForm.textfield(
         name="applicant_name",
         x=80,
         y=250,
