@@ -1237,6 +1237,7 @@ export default function Home() {
                     )}
 
                     {selectedFundingCallId === call.id && (
+                      <>
                       <div className="forms-panel">
                         <h3>Oficjalne formularze</h3>
 
@@ -1406,6 +1407,7 @@ export default function Home() {
                           </p>
                         )}
                       </div>
+                      </>
                     )}
                   </section>
                 ))}
