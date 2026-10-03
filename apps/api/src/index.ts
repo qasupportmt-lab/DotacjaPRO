@@ -3,7 +3,12 @@ import crypto from 'node:crypto';
 import cors from '@fastify/cors';
 import { z } from 'zod';
 import { prisma } from '@dotacjapro/db';
-import { qualifyPupStartup, QUALIFICATION_ENGINE_VERSION } from '@dotacjapro/rules';
+import {
+  assessLocalCriteria,
+  buildLocalCriterionQuestions,
+  qualifyPupStartup,
+  QUALIFICATION_ENGINE_VERSION
+} from '@dotacjapro/rules';
 import { validateTelegramInitData } from './security/telegram.js';
 import { createSessionToken, verifySessionToken } from './security/session.js';
 import { VOIVODESHIPS } from './data/voivodeships.js';
@@ -1003,6 +1008,257 @@ app.get('/v1/cases/:caseId/qualification/latest', async (request, reply) => {
   });
 
   return { snapshot };
+});
+
+
+const localCriteriaQuerySchema = z.object({
+  criterionSetId: z.string().min(1)
+});
+
+function criterionSetToRuleDefinition(set: {
+  id: string;
+  version: number;
+  sourceHash: string;
+  minimumPoints: number | null;
+  maximumPoints: number | null;
+  criteria: Array<{
+    code: string;
+    title: string;
+    description: string | null;
+    maxPoints: number | null;
+    failIfZero: boolean;
+    scoringJson: unknown;
+    evidenceHint: string | null;
+  }>;
+}) {
+  return {
+    id: set.id,
+    version: set.version,
+    sourceHash: set.sourceHash,
+    minimumPoints: set.minimumPoints,
+    maximumPoints: set.maximumPoints,
+    criteria: set.criteria.map((criterion) => ({
+      code: criterion.code,
+      title: criterion.title,
+      description: criterion.description,
+      maxPoints: criterion.maxPoints,
+      failIfZero: criterion.failIfZero,
+      scoringJson: criterion.scoringJson,
+      evidenceHint: criterion.evidenceHint
+    }))
+  };
+}
+
+async function getVerifiedCriterionSetForCase(
+  caseId: string,
+  userId: string,
+  criterionSetId: string
+) {
+  const item = await prisma.case.findFirst({
+    where: { id: caseId, userId },
+    include: {
+      user: {
+        include: {
+          profile: true
+        }
+      }
+    }
+  });
+
+  if (!item) return { error: 'CASE_NOT_FOUND' as const };
+
+  const set = await prisma.localCriterionSet.findFirst({
+    where: {
+      id: criterionSetId,
+      status: 'VERIFIED',
+      verifiedAt: { not: null }
+    },
+    include: {
+      criteria: { orderBy: { sortOrder: 'asc' } },
+      sourceDocument: {
+        include: {
+          source: {
+            select: {
+              canonicalUrl: true,
+              displayName: true
+            }
+          }
+        }
+      },
+      fundingCall: true
+    }
+  });
+
+  if (!set) return { error: 'VERIFIED_CRITERION_SET_NOT_FOUND' as const };
+
+  if (set.sourceHash !== set.sourceDocument.sha256) {
+    return { error: 'CRITERIA_SOURCE_HASH_MISMATCH' as const };
+  }
+
+  const profile = item.user.profile;
+  if (!profile?.pupOfficeId || set.institutionId !== profile.pupOfficeId) {
+    return { error: 'CRITERION_SET_NOT_FOR_USERS_PUP' as const };
+  }
+
+  if (set.fundingCall) {
+    if (
+      set.fundingCall.verificationStatus !== 'VERIFIED' ||
+      !set.fundingCall.verifiedAt ||
+      !['ANNOUNCED', 'OPEN'].includes(set.fundingCall.status)
+    ) {
+      return { error: 'FUNDING_CALL_NOT_ACTIVE_OR_VERIFIED' as const };
+    }
+
+    const now = new Date();
+    if (set.fundingCall.closesAt && set.fundingCall.closesAt < now) {
+      return { error: 'FUNDING_CALL_CLOSED' as const };
+    }
+  }
+
+  return { item, set };
+}
+
+app.get('/v1/cases/:caseId/local-criteria', async (request, reply) => {
+  const userId = await requireUserId(request);
+  const caseId = (request.params as { caseId: string }).caseId;
+  const parsed = localCriteriaQuerySchema.safeParse(request.query);
+
+  if (!parsed.success) {
+    return reply.code(400).send({ error: 'CRITERION_SET_ID_REQUIRED' });
+  }
+
+  const resolved = await getVerifiedCriterionSetForCase(
+    caseId,
+    userId,
+    parsed.data.criterionSetId
+  );
+
+  if ('error' in resolved) {
+    const statusCode = resolved.error === 'CASE_NOT_FOUND' ? 404 : 409;
+    return reply.code(statusCode).send({ error: resolved.error });
+  }
+
+  const definition = criterionSetToRuleDefinition(resolved.set);
+  const questions = buildLocalCriterionQuestions(definition.criteria);
+
+  const latest = await prisma.criterionAssessmentSnapshot.findFirst({
+    where: {
+      caseId,
+      criterionSetId: resolved.set.id
+    },
+    orderBy: { createdAt: 'desc' }
+  });
+
+  return {
+    criterionSet: {
+      id: resolved.set.id,
+      title: resolved.set.title,
+      version: resolved.set.version,
+      minimumPoints: resolved.set.minimumPoints,
+      maximumPoints: resolved.set.maximumPoints,
+      sourceHash: resolved.set.sourceHash,
+      officialSourceUrl: resolved.set.sourceDocument.source.canonicalUrl,
+      sourceDocumentName: resolved.set.sourceDocument.originalName,
+      fundingCall: resolved.set.fundingCall ? {
+        id: resolved.set.fundingCall.id,
+        title: resolved.set.fundingCall.title,
+        status: resolved.set.fundingCall.status,
+        opensAt: resolved.set.fundingCall.opensAt,
+        closesAt: resolved.set.fundingCall.closesAt
+      } : null
+    },
+    questions,
+    latestAssessment: latest ? {
+      id: latest.id,
+      status: latest.status,
+      answers: latest.answersJson,
+      result: latest.resultJson,
+      createdAt: latest.createdAt
+    } : null
+  };
+});
+
+const localCriteriaAssessmentSchema = z.object({
+  criterionSetId: z.string().min(1),
+  answers: z.record(
+    z.string().min(1).max(120),
+    z.union([
+      z.string().max(5000),
+      z.number(),
+      z.boolean(),
+      z.null()
+    ])
+  )
+});
+
+app.post('/v1/cases/:caseId/local-criteria/assess', async (request, reply) => {
+  const userId = await requireUserId(request);
+  const caseId = (request.params as { caseId: string }).caseId;
+  const parsed = localCriteriaAssessmentSchema.safeParse(request.body);
+
+  if (!parsed.success) {
+    return reply.code(400).send({
+      error: 'INVALID_LOCAL_CRITERIA_ANSWERS',
+      details: parsed.error.flatten()
+    });
+  }
+
+  const resolved = await getVerifiedCriterionSetForCase(
+    caseId,
+    userId,
+    parsed.data.criterionSetId
+  );
+
+  if ('error' in resolved) {
+    const statusCode = resolved.error === 'CASE_NOT_FOUND' ? 404 : 409;
+    return reply.code(statusCode).send({ error: resolved.error });
+  }
+
+  const definition = criterionSetToRuleDefinition(resolved.set);
+  const allowedCodes = new Set(definition.criteria.map((criterion) => criterion.code));
+  const sanitizedAnswers = Object.fromEntries(
+    Object.entries(parsed.data.answers)
+      .filter(([code]) => allowedCodes.has(code))
+  );
+
+  const result = assessLocalCriteria(
+    definition,
+    sanitizedAnswers
+  );
+
+  const snapshot = await prisma.criterionAssessmentSnapshot.create({
+    data: {
+      caseId,
+      criterionSetId: resolved.set.id,
+      status: result.status,
+      answersJson: sanitizedAnswers as never,
+      resultJson: result as never
+    }
+  });
+
+  await prisma.auditEvent.create({
+    data: {
+      userId,
+      actorType: 'SYSTEM',
+      action: 'LOCAL_CRITERIA_ASSESSED',
+      entity: 'CriterionAssessmentSnapshot',
+      entityId: snapshot.id,
+      metadata: {
+        caseId,
+        criterionSetId: resolved.set.id,
+        criterionSetVersion: resolved.set.version,
+        sourceHash: resolved.set.sourceHash,
+        status: result.status,
+        knownPoints: result.knownPoints,
+        possiblePoints: result.possiblePoints
+      }
+    }
+  });
+
+  return {
+    snapshotId: snapshot.id,
+    result
+  };
 });
 
 app.get('/v1/me/dashboard', async (request) => {
