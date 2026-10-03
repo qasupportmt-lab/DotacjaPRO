@@ -102,6 +102,7 @@ model RegionAssignment {
   sourceUrl      String
   verifiedAt     DateTime
   @@index([voivodeship, county, municipality, city])
+  @@unique([institutionId, role, voivodeship, municipality])
 }
 
 model Source {
