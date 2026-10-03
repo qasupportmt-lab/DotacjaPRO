@@ -242,6 +242,42 @@ app.get('/health', async () => ({
   officialFormOnly: true
 }));
 
+app.get('/ready', async (_request, reply) => {
+  const requiredEnv = [
+    'DATABASE_URL',
+    'APP_SESSION_SECRET',
+    'INTERNAL_WORKER_SECRET',
+    'EMAIL_VERIFICATION_SECRET',
+    'DOCUMENT_SIGNING_SECRET',
+    'PUBLIC_API_BASE_URL',
+    'SMTP_HOST',
+    'SMTP_USER',
+    'SMTP_PASS',
+    'SMTP_FROM'
+  ];
+
+  const missing = requiredEnv.filter((name) => !process.env[name]);
+  let database = false;
+  let databaseError: string | null = null;
+
+  try {
+    await prisma.$queryRaw`SELECT 1`;
+    database = true;
+  } catch (error) {
+    databaseError = error instanceof Error ? error.message : 'DATABASE_UNAVAILABLE';
+  }
+
+  const ready = missing.length === 0 && database;
+
+  return reply.code(ready ? 200 : 503).send({
+    service: 'dotacjapro-api',
+    ready,
+    database,
+    missingEnv: missing,
+    databaseError: database ? null : databaseError
+  });
+});
+
 app.get('/v1/system/policy', async () => ({
   official_form_only: true,
   regional_routing: true,
