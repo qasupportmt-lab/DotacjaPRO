@@ -669,6 +669,17 @@ app.post('/v1/cases/:caseId/qualify', async (request, reply) => {
           maximumPoints: call.criterionSets[0].maximumPoints,
           sourceHash: call.criterionSets[0].sourceHash,
           officialSourceUrl: call.criterionSets[0].sourceDocument.source.canonicalUrl,
+          questions: buildLocalCriterionQuestions(
+            call.criterionSets[0].criteria.map((criterion) => ({
+              code: criterion.code,
+              title: criterion.title,
+              description: criterion.description,
+              maxPoints: criterion.maxPoints,
+              failIfZero: criterion.failIfZero,
+              scoringJson: criterion.scoringJson,
+              evidenceHint: criterion.evidenceHint
+            }))
+          ),
           criteria: call.criterionSets[0].criteria.map((criterion) => ({
             id: criterion.id,
             code: criterion.code,
@@ -717,95 +728,6 @@ app.post('/v1/cases/:caseId/qualify', async (request, reply) => {
   };
 });
 
-
-function jsonRecord(value: unknown): Record<string, unknown> | null {
-  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
-  return value as Record<string, unknown>;
-}
-
-function finiteNumber(value: unknown): number | null {
-  return typeof value === 'number' && Number.isFinite(value) ? value : null;
-}
-
-function autoScoreCriterion(
-  criterion: {
-    maxPoints: number | null;
-    scoringJson: unknown;
-  },
-  answer: unknown
-): { state: 'SCORED' | 'MANUAL_REVIEW' | 'MISSING'; points: number | null; reason: string } {
-  if (answer === undefined || answer === null || answer === '') {
-    return { state: 'MISSING', points: null, reason: 'Brak odpowiedzi.' };
-  }
-
-  const config = jsonRecord(criterion.scoringJson);
-  if (!config || config.mode !== 'AUTO' || typeof config.type !== 'string') {
-    return {
-      state: 'MANUAL_REVIEW',
-      points: null,
-      reason: 'Kryterium nie ma zweryfikowanej reguły automatycznej i wymaga oceny.'
-    };
-  }
-
-  let points: number | null = null;
-
-  if (config.type === 'BOOLEAN_POINTS' && typeof answer === 'boolean') {
-    points = answer
-      ? finiteNumber(config.truePoints)
-      : finiteNumber(config.falsePoints);
-  }
-
-  if (config.type === 'ENUM_POINTS' && typeof answer === 'string') {
-    const options = jsonRecord(config.options);
-    points = options ? finiteNumber(options[answer]) : null;
-  }
-
-  if (config.type === 'NUMBER_RANGES' && typeof answer === 'number' && Number.isFinite(answer)) {
-    const ranges = Array.isArray(config.ranges) ? config.ranges : [];
-    for (const rawRange of ranges) {
-      const range = jsonRecord(rawRange);
-      if (!range) continue;
-
-      const min = range.min === undefined || range.min === null
-        ? Number.NEGATIVE_INFINITY
-        : finiteNumber(range.min);
-      const max = range.max === undefined || range.max === null
-        ? Number.POSITIVE_INFINITY
-        : finiteNumber(range.max);
-      const candidatePoints = finiteNumber(range.points);
-
-      if (
-        min !== null &&
-        max !== null &&
-        candidatePoints !== null &&
-        answer >= min &&
-        answer <= max
-      ) {
-        points = candidatePoints;
-        break;
-      }
-    }
-  }
-
-  if (points === null) {
-    return {
-      state: 'MANUAL_REVIEW',
-      points: null,
-      reason: 'Odpowiedź nie pasuje do zweryfikowanej reguły automatycznego naliczania.'
-    };
-  }
-
-  const cap = criterion.maxPoints;
-  const safePoints = cap === null
-    ? Math.max(0, points)
-    : Math.max(0, Math.min(points, cap));
-
-  return {
-    state: 'SCORED',
-    points: safePoints,
-    reason: 'Punkty policzono wyłącznie według zweryfikowanej reguły kryterium.'
-  };
-}
 
 const criterionAssessmentSchema = z.object({
   criterionSetId: z.string().min(1),
@@ -858,65 +780,46 @@ app.post('/v1/cases/:caseId/criterion-assessment', async (request, reply) => {
     return reply.code(409).send({ error: 'CRITERION_SET_NOT_FOR_CASE_CALL' });
   }
 
-  const rows = set.criteria.map((criterion) => {
-    const answer = parsed.data.answers[criterion.code];
-    const score = autoScoreCriterion(criterion, answer);
-
-    return {
-      criterionId: criterion.id,
-      code: criterion.code,
-      title: criterion.title,
-      maxPoints: criterion.maxPoints,
-      failIfZero: criterion.failIfZero,
-      answer: answer ?? null,
-      scoringState: score.state,
-      points: score.points,
-      reason: score.reason
-    };
-  });
-
-  const confirmedPoints = rows.reduce(
-    (sum, row) => sum + (row.points ?? 0),
-    0
-  );
-
-  const unresolvedMaxPoints = rows.reduce(
-    (sum, row) =>
-      row.scoringState === 'SCORED'
-        ? sum
-        : sum + (row.maxPoints ?? 0),
-    0
-  );
-
-  const triggeredBlockers = rows
-    .filter((row) => row.failIfZero && row.scoringState === 'SCORED' && row.points === 0)
-    .map((row) => ({ code: row.code, title: row.title }));
-
-  const unresolvedBlockers = rows
-    .filter((row) => row.failIfZero && row.scoringState !== 'SCORED')
-    .map((row) => ({ code: row.code, title: row.title }));
-
-  const minimumPoints = set.minimumPoints;
-  const maximumPossibleFromCurrentData = confirmedPoints + unresolvedMaxPoints;
-
-  let status:
-    | 'BLOCKING_RULE_TRIGGERED'
-    | 'BELOW_THRESHOLD_RANGE'
-    | 'NUMERIC_THRESHOLD_REACHED'
-    | 'PENDING_REVIEW'
-    | 'NO_VERIFIED_THRESHOLD';
-
-  if (triggeredBlockers.length > 0) {
-    status = 'BLOCKING_RULE_TRIGGERED';
-  } else if (minimumPoints === null) {
-    status = 'NO_VERIFIED_THRESHOLD';
-  } else if (maximumPossibleFromCurrentData < minimumPoints) {
-    status = 'BELOW_THRESHOLD_RANGE';
-  } else if (confirmedPoints >= minimumPoints && unresolvedBlockers.length === 0) {
-    status = 'NUMERIC_THRESHOLD_REACHED';
-  } else {
-    status = 'PENDING_REVIEW';
+  const normalizedAnswers: Record<string, LocalCriterionAnswer> = {};
+  for (const [key, value] of Object.entries(parsed.data.answers)) {
+    if (
+      value === null ||
+      value === undefined ||
+      typeof value === 'string' ||
+      typeof value === 'number' ||
+      typeof value === 'boolean'
+    ) {
+      normalizedAnswers[key] = value;
+    }
   }
+
+  const assessment = assessLocalCriteria(
+    {
+      id: set.id,
+      version: set.version,
+      sourceHash: set.sourceHash,
+      minimumPoints: set.minimumPoints,
+      maximumPoints: set.maximumPoints,
+      criteria: set.criteria.map((criterion) => ({
+        code: criterion.code,
+        title: criterion.title,
+        description: criterion.description,
+        maxPoints: criterion.maxPoints,
+        failIfZero: criterion.failIfZero,
+        scoringJson: criterion.scoringJson,
+        evidenceHint: criterion.evidenceHint
+      }))
+    },
+    normalizedAnswers
+  );
+
+  const triggeredBlockers = assessment.results
+    .filter((row) => row.blockingFailure)
+    .map((row) => ({ code: row.code, title: row.title }));
+
+  const unresolvedBlockers = assessment.results
+    .filter((row) => row.blockingUnknown)
+    .map((row) => ({ code: row.code, title: row.title }));
 
   const result = {
     criterionSet: {
@@ -927,18 +830,24 @@ app.post('/v1/cases/:caseId/criterion-assessment', async (request, reply) => {
       officialSourceUrl: set.sourceDocument.source.canonicalUrl,
       verifiedAt: set.verifiedAt
     },
-    status,
-    confirmedPoints,
-    unresolvedMaxPoints,
+    engineVersion: LOCAL_CRITERIA_ENGINE_VERSION,
+    status: assessment.status,
+    confirmedPoints: assessment.knownPoints,
+    unresolvedMaxPoints: Math.max(
+      0,
+      assessment.possiblePoints - assessment.knownPoints
+    ),
     possiblePointsRange: {
-      minimum: confirmedPoints,
-      maximum: maximumPossibleFromCurrentData
+      minimum: assessment.knownPoints,
+      maximum: assessment.possiblePoints
     },
-    minimumPoints,
-    maximumPoints: set.maximumPoints,
+    minimumPoints: assessment.minimumPoints,
+    maximumPoints: assessment.publishedMaximumPoints,
+    thresholdMet: assessment.thresholdMet,
     triggeredBlockers,
     unresolvedBlockers,
-    criteria: rows,
+    criteria: assessment.results,
+    summary: assessment.summary,
     disclaimer: 'To jest techniczna samoocena według zweryfikowanych reguł punktowych. Kryteria uznaniowe pozostają do oceny urzędu i wynik nie oznacza przyznania dofinansowania.'
   };
 
@@ -947,7 +856,7 @@ app.post('/v1/cases/:caseId/criterion-assessment', async (request, reply) => {
       caseId,
       criterionSetId: set.id,
       status,
-      answersJson: parsed.data.answers as never,
+      answersJson: normalizedAnswers as never,
       resultJson: result as never
     }
   });
