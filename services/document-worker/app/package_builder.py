@@ -7,6 +7,7 @@ from io import BytesIO
 from typing import Any
 
 from .storage import get_bytes
+from .legal_pack import LEGAL_VERSION, legal_pack_html, legal_pack_text
 
 
 def _safe_name(value: str) -> str:
@@ -125,6 +126,14 @@ pre{white-space:pre-wrap;font-family:Arial,sans-serif}
             "verifiedAt": payload["submissionInstruction"]["verifiedAt"],
         },
         "documents": [],
+        "legal": {
+            "version": LEGAL_VERSION,
+            "included": True,
+            "files": [
+                "00_WARUNKI_LICENCJA_RODO.html",
+                "00_WARUNKI_LICENCJA_RODO.txt",
+            ],
+        },
     }
 
     buffer = BytesIO()
@@ -178,6 +187,14 @@ pre{white-space:pre-wrap;font-family:Arial,sans-serif}
         archive.writestr(
             "00_INSTRUKCJA_ZLOZENIA.txt",
             instruction_txt.encode("utf-8"),
+        )
+        archive.writestr(
+            "00_WARUNKI_LICENCJA_RODO.html",
+            legal_pack_html().encode("utf-8"),
+        )
+        archive.writestr(
+            "00_WARUNKI_LICENCJA_RODO.txt",
+            legal_pack_text().encode("utf-8"),
         )
         archive.writestr(
             "99_MANIFEST.json",
