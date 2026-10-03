@@ -54,6 +54,7 @@ type CriterionQuestion = {
   description: string | null;
   inputType: 'BOOLEAN' | 'SELECT' | 'NUMBER' | 'EVIDENCE';
   required: boolean;
+  failIfZero: boolean;
   maxPoints: number | null;
   evidenceHint: string | null;
   options?: Array<{ value: string; label: string }>;
@@ -678,6 +679,10 @@ export default function Home() {
                                 </div>
 
                                 {question.description && <p>{question.description}</p>}
+                                <div className="criterion-flags">
+                                  {question.required && <span>Wymagane</span>}
+                                  {question.failIfZero && <span className="warning-chip">0 pkt może blokować ocenę</span>}
+                                </div>
                                 {question.evidenceHint && (
                                   <p className="assessment-note">{question.evidenceHint}</p>
                                 )}
