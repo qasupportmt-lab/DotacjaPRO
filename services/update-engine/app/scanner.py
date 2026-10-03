@@ -10,6 +10,7 @@ from .funding_call import analyze_funding_call_page, discover_call_pages
 from .official_attachments import discover_official_attachments
 from .pup_directory import parse_pup_directory
 from .storage import put_official_document
+from .submission_instruction import analyze_submission_instruction
 
 API_BASE_URL = os.getenv("API_BASE_URL", "http://localhost:4000")
 WORKER_SECRET = os.getenv("INTERNAL_WORKER_SECRET", "")
@@ -120,6 +121,40 @@ async def upsert_funding_call_draft(
         f"{API_BASE_URL}/v1/internal/funding-calls/upsert-draft",
         headers={**worker_headers(), "Content-Type": "application/json"},
         json=payload,
+    )
+    response.raise_for_status()
+    return response.json()
+
+
+
+async def upsert_submission_instruction_draft(
+    client: httpx.AsyncClient,
+    source: dict,
+    html: str,
+    funding_call_id: str,
+    source_hash: str,
+) -> dict | None:
+    institution = source.get("institution") or {}
+    institution_name = institution.get("name") or "Właściwa instytucja"
+
+    candidate = analyze_submission_instruction(
+        html,
+        source["canonicalUrl"],
+        institution_name,
+    )
+
+    if not candidate:
+        return None
+
+    response = await client.post(
+        f"{API_BASE_URL}/v1/internal/submission-instructions/upsert-draft",
+        headers={**worker_headers(), "Content-Type": "application/json"},
+        json={
+            "fundingCallId": funding_call_id,
+            "instruction": candidate["instruction"],
+            "sourceUrl": source["canonicalUrl"],
+            "sourceHash": source_hash,
+        },
     )
     response.raise_for_status()
     return response.json()
@@ -276,6 +311,7 @@ async def scan_source(client: httpx.AsyncClient, source: dict) -> dict:
         )
 
     funding_call_draft = None
+    submission_instruction_draft = None
     if (
         source.get("kind") in {"PUP_CALL_PAGE", "FUNDING_CALL_PAGE"}
         and response.status_code != 304
@@ -285,6 +321,26 @@ async def scan_source(client: httpx.AsyncClient, source: dict) -> dict:
             source,
             response.text,
         )
+
+        funding_call = (
+            funding_call_draft.get("call")
+            if isinstance(funding_call_draft, dict)
+            else None
+        )
+        funding_call_id = (
+            funding_call.get("id")
+            if isinstance(funding_call, dict)
+            else None
+        )
+
+        if funding_call_id:
+            submission_instruction_draft = await upsert_submission_instruction_draft(
+                client,
+                source,
+                response.text,
+                funding_call_id,
+                digest,
+            )
 
     discovered_attachments: list[dict] = []
     attachment_scans: list[dict] = []
@@ -346,6 +402,7 @@ async def scan_source(client: httpx.AsyncClient, source: dict) -> dict:
         "directoryImport": directory_import,
         "discoveredCallPages": len(discovered_call_pages),
         "fundingCallDraft": funding_call_draft,
+        "submissionInstructionDraft": submission_instruction_draft,
         "discoveredAttachments": len(discovered_attachments),
         "attachmentScans": attachment_scans,
         "archivedDocument": archived_document,
