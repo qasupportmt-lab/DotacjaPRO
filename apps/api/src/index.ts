@@ -679,19 +679,7 @@ app.post('/v1/cases/:caseId/qualify', async (request, reply) => {
               scoringJson: criterion.scoringJson,
               evidenceHint: criterion.evidenceHint
             }))
-          ),
-          criteria: call.criterionSets[0].criteria.map((criterion) => ({
-            id: criterion.id,
-            code: criterion.code,
-            category: criterion.category,
-            title: criterion.title,
-            description: criterion.description,
-            maxPoints: criterion.maxPoints,
-            failIfZero: criterion.failIfZero,
-            scoring: criterion.scoringJson,
-            evidenceHint: criterion.evidenceHint,
-            sortOrder: criterion.sortOrder
-          }))
+          )
         } : null
       }))
     }]
