@@ -404,6 +404,35 @@ app.post('/v1/me/legal-acceptances', async (request, reply) => {
   };
 });
 
+async function currentLegalAcceptance(userId: string) {
+  return prisma.auditEvent.findFirst({
+    where: {
+      userId,
+      action: 'LEGAL_ACCEPTANCE',
+      entity: 'LEGAL_TERMS',
+      entityId: LEGAL_VERSION
+    },
+    orderBy: { createdAt: 'desc' },
+    select: {
+      id: true,
+      createdAt: true
+    }
+  });
+}
+
+app.get('/v1/me/legal-acceptances/current', async (request) => {
+  const userId = await requireUserId(request);
+  const acceptance = await currentLegalAcceptance(userId);
+
+  return {
+    legalVersion: LEGAL_VERSION,
+    legalStatementsSha256: LEGAL_STATEMENTS_SHA256,
+    accepted: Boolean(acceptance),
+    acceptedAt: acceptance?.createdAt ?? null,
+    acceptanceId: acceptance?.id ?? null
+  };
+});
+
 app.get('/v1/metadata/voivodeships', async () => ({
   items: VOIVODESHIPS
 }));
@@ -810,13 +839,20 @@ app.get('/v1/locations/search', async (request, reply) => {
   return { items };
 });
 
-const webCredentialsSchema = z.object({
+const webLoginSchema = z.object({
   email: z.string()
     .email()
     .max(320)
     .transform((value) => value.trim().toLowerCase()),
-  password: z.string().min(10).max(128),
-  firstName: z.string().trim().min(1).max(120).optional()
+  password: z.string().min(10).max(128)
+});
+
+const webRegistrationSchema = webLoginSchema.extend({
+  firstName: z.string().trim().min(1).max(120).optional(),
+  legalVersion: z.literal(LEGAL_VERSION),
+  termsAccepted: z.literal(true),
+  licenseAccepted: z.literal(true),
+  privacyAcknowledged: z.literal(true)
 });
 
 function userAuthView(user: {
@@ -843,7 +879,7 @@ function userAuthView(user: {
 }
 
 app.post('/v1/auth/web/register', async (request, reply) => {
-  const parsed = webCredentialsSchema.safeParse(request.body);
+  const parsed = webRegistrationSchema.safeParse(request.body);
   if (!parsed.success) {
     return reply.code(400).send({
       error: 'INVALID_WEB_REGISTRATION',
@@ -874,7 +910,27 @@ app.post('/v1/auth/web/register', async (request, reply) => {
       preferredLanguage: 'pl',
       profile: { create: {} },
       fundingProfile: { create: {} },
-      notificationPreference: { create: {} }
+      notificationPreference: { create: {} },
+      auditEvents: {
+        create: {
+          actorType: 'USER',
+          action: 'LEGAL_ACCEPTANCE',
+          entity: 'LEGAL_TERMS',
+          entityId: LEGAL_VERSION,
+          metadata: {
+            legalVersion: LEGAL_VERSION,
+            legalStatementsSha256: LEGAL_STATEMENTS_SHA256,
+            context: 'ACCOUNT',
+            purchaseReference: null,
+            termsAccepted: true,
+            licenseAccepted: true,
+            privacyAcknowledged: true,
+            digitalImmediateConsent: false,
+            withdrawalAcknowledged: false,
+            acceptedStatementIds: ['terms', 'license', 'privacy']
+          }
+        }
+      }
     },
     select: {
       id: true,
@@ -891,14 +947,14 @@ app.post('/v1/auth/web/register', async (request, reply) => {
 
   return reply.code(201).send({
     token,
-    user: userAuthView(user)
+    user: userAuthView(user),
+    legalAcceptanceRequired: false,
+    legalVersion: LEGAL_VERSION
   });
 });
 
 app.post('/v1/auth/web/login', async (request, reply) => {
-  const parsed = webCredentialsSchema
-    .omit({ firstName: true })
-    .safeParse(request.body);
+  const parsed = webLoginSchema.safeParse(request.body);
 
   if (!parsed.success) {
     return reply.code(400).send({ error: 'INVALID_WEB_LOGIN' });
@@ -925,9 +981,12 @@ app.post('/v1/auth/web/login', async (request, reply) => {
   }
 
   const token = await createSessionToken(user.id);
+  const legalAcceptanceRequired = !(await currentLegalAcceptance(user.id));
   return {
     token,
-    user: userAuthView(user)
+    user: userAuthView(user),
+    legalAcceptanceRequired,
+    legalVersion: LEGAL_VERSION
   };
 });
 
@@ -953,12 +1012,24 @@ app.get('/v1/auth/session', async (request, reply) => {
   });
 
   if (!user) return reply.code(401).send({ error: 'INVALID_SESSION' });
-  return { user: userAuthView(user) };
+  const legalAcceptanceRequired = !(await currentLegalAcceptance(user.id));
+  return {
+    user: userAuthView(user),
+    legalAcceptanceRequired,
+    legalVersion: LEGAL_VERSION
+  };
 });
 
 app.put('/v1/me/web-credentials', async (request, reply) => {
   const userId = await requireUserId(request);
-  const parsed = webCredentialsSchema.safeParse(request.body);
+  const parsed = webRegistrationSchema
+    .omit({
+      legalVersion: true,
+      termsAccepted: true,
+      licenseAccepted: true,
+      privacyAcknowledged: true
+    })
+    .safeParse(request.body);
   if (!parsed.success) {
     return reply.code(400).send({ error: 'INVALID_WEB_CREDENTIALS' });
   }
@@ -1040,8 +1111,11 @@ app.post('/v1/auth/telegram', async (request, reply) => {
     });
 
     const token = await createSessionToken(user.id);
+    const legalAcceptanceRequired = !(await currentLegalAcceptance(user.id));
     return {
       token,
+      legalAcceptanceRequired,
+      legalVersion: LEGAL_VERSION,
       user: {
         id: user.id,
         firstName: user.telegramFirstName,

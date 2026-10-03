@@ -21,7 +21,7 @@ const VOIVODESHIPS = [
   'świętokrzyskie','warmińsko-mazurskie','wielkopolskie','zachodniopomorskie'
 ];
 
-type Step = 'welcome' | 'region' | 'email' | 'employment' | 'business' | 'done';
+type Step = 'welcome' | 'legal' | 'region' | 'email' | 'employment' | 'business' | 'done';
 
 type LocalCriteriaSet = {
   id: string;
@@ -166,6 +166,10 @@ export default function Home() {
   const [webPassword, setWebPassword] = useState('');
   const [webFirstName, setWebFirstName] = useState('');
   const [telegramAvailable, setTelegramAvailable] = useState(false);
+  const [legalVersion, setLegalVersion] = useState<string | null>(null);
+  const [legalTermsAccepted, setLegalTermsAccepted] = useState(false);
+  const [legalLicenseAccepted, setLegalLicenseAccepted] = useState(false);
+  const [legalPrivacyAcknowledged, setLegalPrivacyAcknowledged] = useState(false);
   const [region, setRegion] = useState({
     voivodeship: '',
     city: '',
@@ -239,6 +243,7 @@ export default function Home() {
     setAdminMode(false);
     setCaseId(null);
     setQualification(null);
+    resetLegalChecks();
     setError(null);
     setStep('welcome');
   }
@@ -249,6 +254,8 @@ export default function Home() {
     webApp?.ready();
     webApp?.expand();
     setTelegramAvailable(Boolean(webApp?.initData));
+
+    void loadCurrentLegal();
 
     const savedToken = window.localStorage.getItem('dotacjapro.session');
     if (savedToken) {
@@ -395,6 +402,86 @@ export default function Home() {
     };
   }, [step, region.voivodeship, region.city]);
 
+  async function loadCurrentLegal() {
+    try {
+      const res = await fetch(`${API}/v1/legal/current`, {
+        cache: 'no-store'
+      });
+      if (!res.ok) return null;
+      const data = await res.json();
+      setLegalVersion(data.version ?? null);
+      return data.version ?? null;
+    } catch {
+      return null;
+    }
+  }
+
+  function resetLegalChecks() {
+    setLegalTermsAccepted(false);
+    setLegalLicenseAccepted(false);
+    setLegalPrivacyAcknowledged(false);
+  }
+
+  function routeAfterAuthentication(data: any, channel: 'web' | 'telegram') {
+    window.localStorage.setItem('dotacjapro.session', data.token);
+    setToken(data.token);
+    setEmail(data.user?.email ?? '');
+    setIsAdmin(Boolean(data.user?.isAdmin));
+    setAuthChannel(channel);
+
+    if (data.legalAcceptanceRequired) {
+      resetLegalChecks();
+      if (data.legalVersion) setLegalVersion(data.legalVersion);
+      setStep('legal');
+    } else {
+      setStep('region');
+    }
+  }
+
+  async function acceptCurrentLegal() {
+    if (
+      !token ||
+      !legalVersion ||
+      !legalTermsAccepted ||
+      !legalLicenseAccepted ||
+      !legalPrivacyAcknowledged
+    ) {
+      return;
+    }
+
+    setBusy(true);
+    setError(null);
+
+    try {
+      const res = await fetch(`${API}/v1/me/legal-acceptances`, {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${token}`,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+          version: legalVersion,
+          termsAccepted: true,
+          licenseAccepted: true,
+          privacyAcknowledged: true,
+          digitalImmediateConsent: false,
+          withdrawalAcknowledged: false,
+          context: 'ACCOUNT'
+        })
+      });
+
+      if (!res.ok) {
+        throw new Error('Nie udało się zapisać akceptacji aktualnych warunków.');
+      }
+
+      setStep('region');
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Błąd zapisu zgód');
+    } finally {
+      setBusy(false);
+    }
+  }
+
   async function saveTelegramWriteAccess(sessionToken: string, granted: boolean) {
     try {
       await fetch(`${API}/v1/me/notifications`, {
@@ -431,7 +518,14 @@ export default function Home() {
       setAuthChannel(data.user?.authMethods?.telegram && window.Telegram?.WebApp?.initData
         ? 'telegram'
         : 'web');
-      setStep('region');
+
+      if (data.legalAcceptanceRequired) {
+        resetLegalChecks();
+        if (data.legalVersion) setLegalVersion(data.legalVersion);
+        setStep('legal');
+      } else {
+        setStep('region');
+      }
     } catch {
       window.localStorage.removeItem('dotacjapro.session');
     }
@@ -446,12 +540,21 @@ export default function Home() {
         ? '/v1/auth/web/register'
         : '/v1/auth/web/login';
 
-      const body: Record<string, string> = {
+      const body: Record<string, string | boolean> = {
         email: webEmail.trim().toLowerCase(),
         password: webPassword
       };
-      if (authMode === 'register' && webFirstName.trim()) {
-        body.firstName = webFirstName.trim();
+      if (authMode === 'register') {
+        if (!legalVersion) {
+          throw new Error('Nie udało się pobrać aktualnej wersji warunków.');
+        }
+        body.legalVersion = legalVersion;
+        body.termsAccepted = legalTermsAccepted;
+        body.licenseAccepted = legalLicenseAccepted;
+        body.privacyAcknowledged = legalPrivacyAcknowledged;
+        if (webFirstName.trim()) {
+          body.firstName = webFirstName.trim();
+        }
       }
 
       const res = await fetch(`${API}${endpoint}`, {
@@ -478,12 +581,7 @@ export default function Home() {
         );
       }
 
-      window.localStorage.setItem('dotacjapro.session', data.token);
-      setToken(data.token);
-      setEmail(data.user?.email ?? webEmail.trim().toLowerCase());
-      setIsAdmin(Boolean(data.user?.isAdmin));
-      setAuthChannel('web');
-      setStep('region');
+      routeAfterAuthentication(data, 'web');
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Błąd logowania');
     } finally {
@@ -506,12 +604,7 @@ export default function Home() {
       if (!res.ok) throw new Error('Nie udało się zalogować przez Telegram.');
 
       const data = await res.json();
-      window.localStorage.setItem('dotacjapro.session', data.token);
-      setToken(data.token);
-      setEmail(data.user?.email ?? '');
-      setIsAdmin(Boolean(data.user?.isAdmin));
-      setAuthChannel('telegram');
-      setStep('region');
+      routeAfterAuthentication(data, 'telegram');
 
       const requestWriteAccess = window.Telegram?.WebApp?.requestWriteAccess;
       if (requestWriteAccess) {
@@ -1163,14 +1256,16 @@ export default function Home() {
     }
   }
 
-  const progressed = {
+  const progressed: Record<Step, number> = {
     welcome: 0,
+    legal: 0,
     region: 1,
     email: 2,
     employment: 3,
     business: 4,
     done: 5
-  }[step];
+  };
+  const progressValue = progressed[step];
 
   return (
     <main className="shell">
@@ -1329,7 +1424,7 @@ export default function Home() {
 
       <section className="card">
         <div className="progress">
-          {[1,2,3,4,5].map((n) => <span key={n} className={progressed >= n ? 'active' : ''}></span>)}
+          {[1,2,3,4,5].map((n) => <span key={n} className={progressValue >= n ? 'active' : ''}></span>)}
         </div>
 
         {step === 'welcome' && <>
@@ -1392,9 +1487,57 @@ export default function Home() {
             />
           </label>
 
+          {authMode === 'register' && (
+            <div className="legal-consents">
+              <label className="legal-check">
+                <input
+                  type="checkbox"
+                  checked={legalTermsAccepted}
+                  onChange={(e) => setLegalTermsAccepted(e.target.checked)}
+                />
+                <span>
+                  Akceptuję <a href="/legal" target="_blank" rel="noreferrer">Regulamin DotacjaPRO</a>.
+                </span>
+              </label>
+              <label className="legal-check">
+                <input
+                  type="checkbox"
+                  checked={legalLicenseAccepted}
+                  onChange={(e) => setLegalLicenseAccepted(e.target.checked)}
+                />
+                <span>
+                  Akceptuję warunki licencji i zasady korzystania z materiałów.
+                </span>
+              </label>
+              <label className="legal-check">
+                <input
+                  type="checkbox"
+                  checked={legalPrivacyAcknowledged}
+                  onChange={(e) => setLegalPrivacyAcknowledged(e.target.checked)}
+                />
+                <span>
+                  Potwierdzam zapoznanie się z <a href="/legal" target="_blank" rel="noreferrer">Polityką prywatności i informacją RODO</a>.
+                </span>
+              </label>
+              <small>
+                Zgoda marketingowa nie jest częścią tych oświadczeń i nie jest warunkiem założenia konta.
+              </small>
+            </div>
+          )}
+
           <button
             onClick={authenticateWeb}
-            disabled={busy || !webEmail.includes('@') || webPassword.length < 10}
+            disabled={
+              busy ||
+              !webEmail.includes('@') ||
+              webPassword.length < 10 ||
+              (authMode === 'register' && (
+                !legalVersion ||
+                !legalTermsAccepted ||
+                !legalLicenseAccepted ||
+                !legalPrivacyAcknowledged
+              ))
+            }
           >
             {busy
               ? 'Łączenie…'
@@ -1416,6 +1559,65 @@ export default function Home() {
             E-mail do wysyłki dokumentów potwierdzimy osobno przed generowaniem
             i wysyłką finalnego pakietu.
           </p>
+        </>}
+
+        {step === 'legal' && <>
+          <h2>Aktualne warunki korzystania</h2>
+          <p>
+            Przed przejściem dalej potwierdź aktualną wersję Regulaminu,
+            Licencji oraz informacji RODO. Ten ekran pojawi się ponownie tylko
+            wtedy, gdy wersja dokumentów ulegnie zmianie.
+          </p>
+
+          <div className="legal-consents">
+            <label className="legal-check">
+              <input
+                type="checkbox"
+                checked={legalTermsAccepted}
+                onChange={(e) => setLegalTermsAccepted(e.target.checked)}
+              />
+              <span>
+                Akceptuję <a href="/legal" target="_blank" rel="noreferrer">Regulamin DotacjaPRO</a>.
+              </span>
+            </label>
+            <label className="legal-check">
+              <input
+                type="checkbox"
+                checked={legalLicenseAccepted}
+                onChange={(e) => setLegalLicenseAccepted(e.target.checked)}
+              />
+              <span>Akceptuję warunki licencji i zasady korzystania z materiałów.</span>
+            </label>
+            <label className="legal-check">
+              <input
+                type="checkbox"
+                checked={legalPrivacyAcknowledged}
+                onChange={(e) => setLegalPrivacyAcknowledged(e.target.checked)}
+              />
+              <span>
+                Potwierdzam zapoznanie się z <a href="/legal" target="_blank" rel="noreferrer">Polityką prywatności i informacją RODO</a>.
+              </span>
+            </label>
+          </div>
+
+          {legalVersion && <p className="auth-note">Wersja dokumentów: {legalVersion}</p>}
+
+          <button
+            onClick={acceptCurrentLegal}
+            disabled={
+              busy ||
+              !legalVersion ||
+              !legalTermsAccepted ||
+              !legalLicenseAccepted ||
+              !legalPrivacyAcknowledged
+            }
+          >
+            {busy ? 'Zapisywanie…' : 'Akceptuję i przechodzę dalej'}
+          </button>
+
+          <button className="secondary" onClick={logout} disabled={busy}>
+            Wyloguj
+          </button>
         </>}
 
         {step === 'region' && <>
