@@ -5,7 +5,7 @@ import re
 from contextlib import asynccontextmanager
 
 import httpx
-from fastapi import FastAPI, Header, HTTPException
+from fastapi import FastAPI, Header, HTTPException, Query, Request
 
 from .analyzers.dispatch import analyze_official_document
 from .renderers.dispatch import (
@@ -33,6 +33,13 @@ def worker_headers() -> dict[str, str]:
 def verify_worker_secret(received: str | None) -> None:
     if not WORKER_SECRET or received != WORKER_SECRET:
         raise HTTPException(status_code=401, detail="Unauthorized")
+
+
+def verify_cron_secret(request: Request) -> None:
+    configured = os.getenv("CRON_SECRET")
+    received = request.headers.get("authorization")
+    if not configured or received != f"Bearer {configured}":
+        raise HTTPException(status_code=401, detail="Unauthorized cron")
 
 
 def safe_output_name(original_name: str) -> str:
@@ -389,6 +396,38 @@ async def analyze_once() -> dict:
             }
 
 
+async def process_next_priority_job() -> dict:
+    package_result = await package_once()
+    if package_result.get("processed"):
+        return {"kind": "package", **package_result}
+
+    render_result = await work_once()
+    if render_result.get("processed"):
+        return {"kind": "render", **render_result}
+
+    analysis_result = await analyze_once()
+    if analysis_result.get("processed"):
+        return {"kind": "analysis", **analysis_result}
+
+    return {"processed": False, "kind": None}
+
+
+async def drain_jobs(max_jobs: int = 10) -> dict:
+    processed = []
+    limit = max(1, min(max_jobs, 50))
+
+    for _ in range(limit):
+        result = await process_next_priority_job()
+        if not result.get("processed"):
+            break
+        processed.append(result)
+
+    return {
+        "processed": len(processed),
+        "jobs": processed,
+    }
+
+
 async def worker_loop() -> None:
     while not _stop_event.is_set():
         try:
@@ -414,8 +453,10 @@ async def worker_loop() -> None:
 @asynccontextmanager
 async def lifespan(_: FastAPI):
     global _worker_task
+    enabled = os.getenv("ENABLE_BACKGROUND_WORKER", "false").lower() == "true"
     _stop_event.clear()
-    _worker_task = asyncio.create_task(worker_loop())
+    if enabled:
+        _worker_task = asyncio.create_task(worker_loop())
     yield
     _stop_event.set()
     if _worker_task:
@@ -437,6 +478,10 @@ def health():
         "supported_formats": ["PDF", "DOCX", "XLSX"],
         "legacy_formats_blocked": ["DOC", "XLS"],
         "package_delivery": ["smtp_attachment", "signed_url_fallback"],
+        "backgroundWorker": os.getenv(
+            "ENABLE_BACKGROUND_WORKER",
+            "false",
+        ).lower() == "true",
     }
 
 
@@ -462,3 +507,21 @@ async def run_package_once(
 ):
     verify_worker_secret(x_worker_secret)
     return await package_once()
+
+
+@app.get("/cron/drain")
+async def cron_drain(
+    request: Request,
+    max_jobs: int = Query(default=10, ge=1, le=50),
+):
+    verify_cron_secret(request)
+    return await drain_jobs(max_jobs=max_jobs)
+
+
+@app.post("/drain")
+async def drain_now(
+    max_jobs: int = Query(default=10, ge=1, le=50),
+    x_worker_secret: str | None = Header(default=None),
+):
+    verify_worker_secret(x_worker_secret)
+    return await drain_jobs(max_jobs=max_jobs)
