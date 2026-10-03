@@ -2226,6 +2226,261 @@ app.post('/v1/internal/funding-calls/advance-statuses', async (request) => {
   };
 });
 
+
+const localCriterionSchema = z.object({
+  code: z.string().min(1).max(120),
+  category: z.string().max(300).optional(),
+  title: z.string().min(1).max(700),
+  description: z.string().max(5000).optional(),
+  maxPoints: z.number().min(0).max(1000).optional(),
+  failIfZero: z.boolean().default(false),
+  scoringJson: z.unknown().optional(),
+  evidenceHint: z.string().max(3000).optional(),
+  sortOrder: z.number().int().min(0).max(10000).default(0)
+});
+
+const criterionSetDraftSchema = z.object({
+  sourceDocumentId: z.string().min(1),
+  title: z.string().min(3).max(700),
+  minimumPoints: z.number().min(0).max(1000).optional(),
+  maximumPoints: z.number().min(0).max(1000).optional(),
+  blockingRulesJson: z.unknown().optional(),
+  analysisJson: z.unknown().optional(),
+  criteria: z.array(localCriterionSchema).max(300)
+});
+
+app.post('/v1/internal/criterion-sets/upsert-draft', async (request, reply) => {
+  requireWorkerSecret(request);
+  const parsed = criterionSetDraftSchema.safeParse(request.body);
+
+  if (!parsed.success) {
+    return reply.code(400).send({
+      error: 'INVALID_CRITERION_SET_DRAFT',
+      details: parsed.error.flatten()
+    });
+  }
+
+  const document = await prisma.sourceDocument.findUnique({
+    where: { id: parsed.data.sourceDocumentId },
+    include: { source: true }
+  });
+
+  if (!document || !document.source.institutionId) {
+    return reply.code(404).send({ error: 'CRITERIA_SOURCE_DOCUMENT_NOT_FOUND' });
+  }
+
+  if (document.source.kind !== 'CRITERIA') {
+    return reply.code(409).send({ error: 'CRITERIA_DOCUMENT_REQUIRED' });
+  }
+
+  const existing = await prisma.localCriterionSet.findUnique({
+    where: { sourceDocumentId: document.id },
+    include: { criteria: true }
+  });
+
+  if (existing?.status === 'VERIFIED') {
+    return {
+      criterionSet: existing,
+      protected: true,
+      reason: 'VERIFIED_SET_CANNOT_BE_OVERWRITTEN_BY_AUTOMATION'
+    };
+  }
+
+  let fundingCallId: string | null = null;
+  if (document.source.discoveredFromUrl) {
+    const callSource = await prisma.source.findUnique({
+      where: { canonicalUrl: document.source.discoveredFromUrl },
+      select: { id: true }
+    });
+
+    if (callSource) {
+      const call = await prisma.fundingCall.findUnique({
+        where: { sourceId: callSource.id },
+        select: { id: true }
+      });
+      fundingCallId = call?.id ?? null;
+    }
+  }
+
+  const result = await prisma.$transaction(async (tx) => {
+    const set = await tx.localCriterionSet.upsert({
+      where: { sourceDocumentId: document.id },
+      update: {
+        institutionId: document.source.institutionId!,
+        fundingCallId,
+        title: parsed.data.title,
+        status: 'DRAFT',
+        minimumPoints: parsed.data.minimumPoints ?? null,
+        maximumPoints: parsed.data.maximumPoints ?? null,
+        blockingRulesJson: parsed.data.blockingRulesJson as never,
+        analysisJson: parsed.data.analysisJson as never,
+        sourceHash: document.sha256,
+        analyzedAt: new Date(),
+        verifiedAt: null,
+        version: { increment: 1 }
+      },
+      create: {
+        institutionId: document.source.institutionId!,
+        fundingCallId,
+        sourceDocumentId: document.id,
+        title: parsed.data.title,
+        status: 'DRAFT',
+        minimumPoints: parsed.data.minimumPoints ?? null,
+        maximumPoints: parsed.data.maximumPoints ?? null,
+        blockingRulesJson: parsed.data.blockingRulesJson as never,
+        analysisJson: parsed.data.analysisJson as never,
+        sourceHash: document.sha256,
+        analyzedAt: new Date()
+      }
+    });
+
+    await tx.localCriterion.deleteMany({
+      where: { criterionSetId: set.id }
+    });
+
+    if (parsed.data.criteria.length > 0) {
+      await tx.localCriterion.createMany({
+        data: parsed.data.criteria.map((criterion) => ({
+          criterionSetId: set.id,
+          code: criterion.code,
+          category: criterion.category ?? null,
+          title: criterion.title,
+          description: criterion.description ?? null,
+          maxPoints: criterion.maxPoints ?? null,
+          failIfZero: criterion.failIfZero,
+          scoringJson: criterion.scoringJson as never,
+          evidenceHint: criterion.evidenceHint ?? null,
+          sortOrder: criterion.sortOrder
+        }))
+      });
+    }
+
+    return tx.localCriterionSet.findUniqueOrThrow({
+      where: { id: set.id },
+      include: {
+        criteria: { orderBy: { sortOrder: 'asc' } },
+        sourceDocument: true
+      }
+    });
+  });
+
+  return {
+    criterionSet: result,
+    protected: false
+  };
+});
+
+const verifyCriterionSetSchema = z.object({
+  title: z.string().min(3).max(700).optional(),
+  minimumPoints: z.number().min(0).max(1000).nullable().optional(),
+  maximumPoints: z.number().min(0).max(1000).nullable().optional(),
+  blockingRulesJson: z.unknown().optional(),
+  criteria: z.array(localCriterionSchema).max(300).optional()
+});
+
+app.post('/v1/internal/criterion-sets/:id/verify', async (request, reply) => {
+  requireWorkerSecret(request);
+  const id = (request.params as { id: string }).id;
+  const parsed = verifyCriterionSetSchema.safeParse(request.body);
+
+  if (!parsed.success) {
+    return reply.code(400).send({
+      error: 'INVALID_CRITERION_SET_VERIFICATION',
+      details: parsed.error.flatten()
+    });
+  }
+
+  const existing = await prisma.localCriterionSet.findUnique({
+    where: { id },
+    include: {
+      criteria: true,
+      sourceDocument: { include: { source: true } }
+    }
+  });
+
+  if (!existing) {
+    return reply.code(404).send({ error: 'CRITERION_SET_NOT_FOUND' });
+  }
+
+  if (existing.sourceHash !== existing.sourceDocument.sha256) {
+    return reply.code(409).send({ error: 'CRITERIA_SOURCE_HASH_MISMATCH' });
+  }
+
+  const result = await prisma.$transaction(async (tx) => {
+    if (parsed.data.criteria) {
+      await tx.localCriterion.deleteMany({
+        where: { criterionSetId: id }
+      });
+
+      if (parsed.data.criteria.length > 0) {
+        await tx.localCriterion.createMany({
+          data: parsed.data.criteria.map((criterion) => ({
+            criterionSetId: id,
+            code: criterion.code,
+            category: criterion.category ?? null,
+            title: criterion.title,
+            description: criterion.description ?? null,
+            maxPoints: criterion.maxPoints ?? null,
+            failIfZero: criterion.failIfZero,
+            scoringJson: criterion.scoringJson as never,
+            evidenceHint: criterion.evidenceHint ?? null,
+            sortOrder: criterion.sortOrder
+          }))
+        });
+      }
+    }
+
+    return tx.localCriterionSet.update({
+      where: { id },
+      data: {
+        title: parsed.data.title ?? existing.title,
+        minimumPoints: parsed.data.minimumPoints === undefined
+          ? existing.minimumPoints
+          : parsed.data.minimumPoints,
+        maximumPoints: parsed.data.maximumPoints === undefined
+          ? existing.maximumPoints
+          : parsed.data.maximumPoints,
+        blockingRulesJson: parsed.data.blockingRulesJson === undefined
+          ? existing.blockingRulesJson
+          : parsed.data.blockingRulesJson as never,
+        status: 'VERIFIED',
+        verifiedAt: new Date(),
+        version: { increment: 1 }
+      },
+      include: {
+        criteria: { orderBy: { sortOrder: 'asc' } },
+        sourceDocument: true
+      }
+    });
+  });
+
+  const source = existing.sourceDocument.source;
+  await prisma.changeEvent.create({
+    data: {
+      sourceId: source.id,
+      changeType: 'LOCAL_CRITERIA_VERIFIED',
+      severity: 'YELLOW',
+      summary: `Zweryfikowano lokalne kryteria: ${result.title}`,
+      verified: true,
+      verifiedAt: new Date(),
+      verificationScore: 100,
+      payload: {
+        criterionSetId: result.id,
+        fundingCallId: result.fundingCallId,
+        sourceDocumentId: result.sourceDocumentId,
+        sourceHash: result.sourceHash,
+        minimumPoints: result.minimumPoints,
+        maximumPoints: result.maximumPoints,
+        scopeVoivodeship: source.scopeVoivodeship,
+        scopeCounty: source.scopeCounty,
+        scopeMunicipality: source.scopeMunicipality
+      }
+    }
+  });
+
+  return { criterionSet: result };
+});
+
 const verifyChangeSchema = z.object({
   verified: z.boolean(),
   verificationScore: z.number().int().min(0).max(100).optional()
