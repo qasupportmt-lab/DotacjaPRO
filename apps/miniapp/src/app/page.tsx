@@ -37,6 +37,13 @@ export default function Home() {
     county: '',
     postalCode: ''
   });
+  const [regionSuggestions, setRegionSuggestions] = useState<Array<{
+    municipality: string | null;
+    city: string | null;
+    county: string | null;
+    pup: { id: string; name: string; officialUrl: string };
+  }>>([]);
+  const [selectedPupName, setSelectedPupName] = useState<string | null>(null);
   const [email, setEmail] = useState('');
   const [emailCode, setEmailCode] = useState('');
   const [emailCodeSent, setEmailCodeSent] = useState(false);
@@ -53,6 +60,36 @@ export default function Home() {
     webApp?.ready();
     webApp?.expand();
   }, []);
+
+  useEffect(() => {
+    if (step !== 'region' || !region.voivodeship || region.city.trim().length < 2) {
+      setRegionSuggestions([]);
+      return;
+    }
+
+    const controller = new AbortController();
+    const timer = window.setTimeout(async () => {
+      try {
+        const params = new URLSearchParams({
+          voivodeship: region.voivodeship,
+          q: region.city.trim()
+        });
+        const res = await fetch(`${API}/v1/regions/search?${params.toString()}`, {
+          signal: controller.signal
+        });
+        if (!res.ok) return;
+        const data = await res.json();
+        setRegionSuggestions(data.items ?? []);
+      } catch {
+        // Sugestie są pomocą. Ich brak nie blokuje ręcznego zapisu regionu.
+      }
+    }, 250);
+
+    return () => {
+      window.clearTimeout(timer);
+      controller.abort();
+    };
+  }, [step, region.voivodeship, region.city]);
 
   async function saveTelegramWriteAccess(sessionToken: string, granted: boolean) {
     try {
@@ -252,7 +289,34 @@ export default function Home() {
           <label>Województwo<select value={region.voivodeship} onChange={e => setRegion({...region, voivodeship:e.target.value})}>
             <option value="">Wybierz</option>{VOIVODESHIPS.map(v => <option key={v}>{v}</option>)}
           </select></label>
-          <label>Miasto / miejscowość<input value={region.city} onChange={e => setRegion({...region, city:e.target.value})} placeholder="np. Sosnowiec" /></label>
+          <label>Miasto / miejscowość<input value={region.city} onChange={e => {
+            setRegion({...region, city:e.target.value});
+            setSelectedPupName(null);
+          }} placeholder="np. Sosnowiec" /></label>
+          {regionSuggestions.length > 0 && <div className="suggestions">
+            {regionSuggestions.map((item) => {
+              const label = item.municipality ?? item.city ?? '';
+              return <button
+                type="button"
+                className="suggestion"
+                key={`${item.pup.id}-${label}`}
+                onClick={() => {
+                  setRegion({
+                    ...region,
+                    city: item.city ?? label,
+                    municipality: item.municipality ?? label,
+                    county: item.county ?? region.county
+                  });
+                  setSelectedPupName(item.pup.name);
+                  setRegionSuggestions([]);
+                }}
+              >
+                <strong>{label}</strong>
+                <span>{item.pup.name}</span>
+              </button>;
+            })}
+          </div>}
+          {selectedPupName && <p className="verified">✓ Właściwy urząd: {selectedPupName}</p>}
           <label>Gmina <small>opcjonalnie</small><input value={region.municipality} onChange={e => setRegion({...region, municipality:e.target.value})} /></label>
           <label>Powiat <small>opcjonalnie</small><input value={region.county} onChange={e => setRegion({...region, county:e.target.value})} /></label>
           <label>Kod pocztowy <small>opcjonalnie</small><input value={region.postalCode} onChange={e => setRegion({...region, postalCode:e.target.value})} placeholder="00-000" /></label>
