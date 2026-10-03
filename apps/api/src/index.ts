@@ -257,9 +257,7 @@ app.get('/ready', async (_request, reply) => {
   ];
 
   const missing = requiredEnv.filter((name) => !process.env[name]);
-  if (!emailProviderConfigured()) {
-    missing.push('EMAIL_PROVIDER');
-  }
+  const emailConfigured = emailProviderConfigured();
   let database = false;
   let databaseError: string | null = null;
 
@@ -272,10 +270,21 @@ app.get('/ready', async (_request, reply) => {
 
   const ready = missing.length === 0 && database;
 
+  if (!ready) {
+    app.log.error(
+      {
+        missingEnv: missing,
+        databaseError
+      },
+      'Readiness check failed'
+    );
+  }
+
   return reply.code(ready ? 200 : 503).send({
     service: 'dotacjapro-api',
     ready,
     database,
+    emailProviderConfigured: emailConfigured,
     missingEnv: missing,
     databaseError: database ? null : databaseError
   });
