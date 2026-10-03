@@ -111,6 +111,8 @@ model Source {
   institution   Institution? @relation(fields: [institutionId], references: [id])
   kind          String
   canonicalUrl  String   @unique
+  displayName   String?
+  discoveredFromUrl String?
   trustLevel    String
   enabled       Boolean  @default(true)
   checkedAt     DateTime?
