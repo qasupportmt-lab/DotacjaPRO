@@ -397,6 +397,118 @@ function valueIsPresent(value: unknown) {
   return true;
 }
 
+
+app.get('/v1/cases/:caseId/form-questions', async (request, reply) => {
+  const userId = await requireUserId(request);
+  const caseId = (request.params as { caseId: string }).caseId;
+  const query = z.object({ templateId: z.string().min(1) }).safeParse(request.query);
+  if (!query.success) return reply.code(400).send({ error: 'TEMPLATE_ID_REQUIRED' });
+
+  const [item, template] = await Promise.all([
+    prisma.case.findFirst({
+      where: { id: caseId, userId }
+    }),
+    prisma.officialFormTemplate.findFirst({
+      where: {
+        id: query.data.templateId,
+        active: true,
+        officialOnly: true,
+        mappingStatus: 'VERIFIED'
+      },
+      include: {
+        fieldMappings: { orderBy: [{ section: 'asc' }, { sortOrder: 'asc' }] },
+        sourceDocument: {
+          include: { source: { select: { canonicalUrl: true, displayName: true } } }
+        }
+      }
+    })
+  ]);
+
+  if (!item) return reply.code(404).send({ error: 'CASE_NOT_FOUND' });
+  if (!template) return reply.code(404).send({ error: 'VERIFIED_TEMPLATE_NOT_FOUND' });
+
+  const values = await buildResolvedCaseValues(caseId, userId);
+
+  return {
+    template: {
+      id: template.id,
+      versionLabel: template.versionLabel,
+      mappingVersion: template.mappingVersion,
+      originalName: template.sourceDocument.originalName,
+      officialSourceUrl: template.sourceDocument.source.canonicalUrl,
+      sha256: template.sourceDocument.sha256
+    },
+    questions: template.fieldMappings.map((mapping) => ({
+      fieldKey: mapping.fieldKey,
+      label: mapping.questionLabel ?? mapping.fieldKey,
+      section: mapping.section,
+      inputType: mapping.inputType,
+      required: mapping.required,
+      helpText: mapping.helpText,
+      validation: mapping.validationJson,
+      value: values[mapping.fieldKey] ?? null
+    }))
+  };
+});
+
+const caseAnswersSchema = z.object({
+  answers: z.array(z.object({
+    fieldKey: z.string().min(1).max(240),
+    value: z.unknown()
+  })).min(1).max(100)
+});
+
+app.put('/v1/cases/:caseId/answers', async (request, reply) => {
+  const userId = await requireUserId(request);
+  const caseId = (request.params as { caseId: string }).caseId;
+  const parsed = caseAnswersSchema.safeParse(request.body);
+  if (!parsed.success) {
+    return reply.code(400).send({ error: 'INVALID_CASE_ANSWERS', details: parsed.error.flatten() });
+  }
+
+  const item = await prisma.case.findFirst({
+    where: { id: caseId, userId }
+  });
+  if (!item) return reply.code(404).send({ error: 'CASE_NOT_FOUND' });
+
+  const uniqueAnswers = new Map<string, unknown>();
+  for (const answer of parsed.data.answers) {
+    uniqueAnswers.set(answer.fieldKey, answer.value);
+  }
+
+  const saved = [];
+  for (const [fieldKey, value] of uniqueAnswers.entries()) {
+    const latest = await prisma.caseAnswer.findFirst({
+      where: { caseId, fieldKey },
+      orderBy: { version: 'desc' },
+      select: { version: true, valueJson: true }
+    });
+
+    const record = await prisma.caseAnswer.create({
+      data: {
+        caseId,
+        fieldKey,
+        valueJson: value as never,
+        version: (latest?.version ?? 0) + 1
+      }
+    });
+    saved.push(record);
+  }
+
+  await prisma.auditEvent.create({
+    data: {
+      userId,
+      actorType: 'USER',
+      action: 'CASE_ANSWERS_UPDATED',
+      entity: 'Case',
+      entityId: caseId,
+      metadata: { fieldKeys: [...uniqueAnswers.keys()] }
+    }
+  });
+
+  return { saved: saved.length };
+});
+
 const renderRequestSchema = z.object({
   templateId: z.string().min(1)
 });
@@ -894,6 +1006,107 @@ app.post('/v1/internal/source-document', async (request, reply) => {
 });
 
 
+
+
+const templateMappingsSchema = z.object({
+  mappingStatus: z.enum(['DRAFT', 'VERIFIED']),
+  mappings: z.array(z.object({
+    fieldKey: z.string().min(1).max(240),
+    sourcePath: z.string().max(1000).default(''),
+    locatorType: z.enum([
+      'PDF_ACROFORM',
+      'PDF_COORDINATE',
+      'DOCX_TOKEN',
+      'DOCX_TABLE_CELL',
+      'DOCX_PARAGRAPH',
+      'XLSX_CELL'
+    ]),
+    locatorJson: z.record(z.string(), z.unknown()).optional(),
+    inputType: z.string().min(1).max(80),
+    questionLabel: z.string().min(1).max(500).optional(),
+    section: z.string().max(300).optional(),
+    sortOrder: z.number().int().min(0).max(10000).default(0),
+    required: z.boolean().default(false),
+    helpText: z.string().max(2000).optional(),
+    validationJson: z.record(z.string(), z.unknown()).optional()
+  })).max(500)
+});
+
+app.put('/v1/internal/templates/:id/mappings', async (request, reply) => {
+  requireWorkerSecret(request);
+  const id = (request.params as { id: string }).id;
+  const parsed = templateMappingsSchema.safeParse(request.body);
+  if (!parsed.success) {
+    return reply.code(400).send({ error: 'INVALID_TEMPLATE_MAPPINGS', details: parsed.error.flatten() });
+  }
+
+  const template = await prisma.officialFormTemplate.findUnique({
+    where: { id },
+    include: { sourceDocument: true }
+  });
+  if (!template) return reply.code(404).send({ error: 'TEMPLATE_NOT_FOUND' });
+  if (!template.officialOnly) {
+    return reply.code(409).send({ error: 'OFFICIAL_TEMPLATE_REQUIRED' });
+  }
+
+  const result = await prisma.$transaction(async (tx) => {
+    await tx.formFieldMapping.deleteMany({ where: { templateId: id } });
+
+    if (parsed.data.mappings.length > 0) {
+      await tx.formFieldMapping.createMany({
+        data: parsed.data.mappings.map((mapping) => ({
+          templateId: id,
+          fieldKey: mapping.fieldKey,
+          sourcePath: mapping.sourcePath,
+          locatorType: mapping.locatorType,
+          locatorJson: mapping.locatorJson as never,
+          inputType: mapping.inputType,
+          questionLabel: mapping.questionLabel ?? null,
+          section: mapping.section ?? null,
+          sortOrder: mapping.sortOrder,
+          required: mapping.required,
+          helpText: mapping.helpText ?? null,
+          validationJson: mapping.validationJson as never
+        }))
+      });
+    }
+
+    return tx.officialFormTemplate.update({
+      where: { id },
+      data: {
+        mappingStatus: parsed.data.mappingStatus,
+        mappingVerifiedAt: parsed.data.mappingStatus === 'VERIFIED' ? new Date() : null,
+        mappingVersion: { increment: 1 }
+      },
+      include: {
+        fieldMappings: { orderBy: { sortOrder: 'asc' } }
+      }
+    });
+  });
+
+  await prisma.auditEvent.create({
+    data: {
+      actorType: 'SYSTEM',
+      action: parsed.data.mappingStatus === 'VERIFIED'
+        ? 'OFFICIAL_FORM_MAPPING_VERIFIED'
+        : 'OFFICIAL_FORM_MAPPING_UPDATED',
+      entity: 'OfficialFormTemplate',
+      entityId: id,
+      metadata: {
+        sourceSha256: template.sourceDocument.sha256,
+        mappingVersion: result.mappingVersion,
+        fields: result.fieldMappings.length
+      }
+    }
+  });
+
+  return {
+    templateId: result.id,
+    mappingStatus: result.mappingStatus,
+    mappingVersion: result.mappingVersion,
+    fields: result.fieldMappings.length
+  };
+});
 
 app.post('/v1/internal/document-jobs/claim', async (request) => {
   requireWorkerSecret(request);
