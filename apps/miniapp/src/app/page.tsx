@@ -231,6 +231,18 @@ export default function Home() {
     return new Date(value).toLocaleDateString('pl-PL');
   }
 
+  function logout() {
+    window.localStorage.removeItem('dotacjapro.session');
+    setToken(null);
+    setAuthChannel(null);
+    setIsAdmin(false);
+    setAdminMode(false);
+    setCaseId(null);
+    setQualification(null);
+    setError(null);
+    setStep('welcome');
+  }
+
 
   useEffect(() => {
     const webApp = window.Telegram?.WebApp;
@@ -496,6 +508,7 @@ export default function Home() {
       const data = await res.json();
       window.localStorage.setItem('dotacjapro.session', data.token);
       setToken(data.token);
+      setEmail(data.user?.email ?? '');
       setIsAdmin(Boolean(data.user?.isAdmin));
       setAuthChannel('telegram');
       setStep('region');
@@ -1166,6 +1179,15 @@ export default function Home() {
         <h1>Twoja droga do finansowania firmy</h1>
         <p>Ustalimy Twój region i sytuację, dopasujemy programy, a dokumenty przygotujemy wyłącznie na aktualnych, oficjalnych formularzach.</p>
       </section>
+
+      {token && (
+        <section className="session-toolbar">
+          <span>{authChannel === 'telegram' ? 'Połączono przez Telegram' : 'Konto web'}</span>
+          <button className="secondary compact" onClick={logout}>
+            Wyloguj
+          </button>
+        </section>
+      )}
 
       {isAdmin && (
         <section className="admin-toolbar">
