@@ -48,6 +48,33 @@ async function requireUserId(request: FastifyRequest) {
   return userId;
 }
 
+function configuredAdminTelegramIds() {
+  return new Set(
+    (process.env.ADMIN_TELEGRAM_USER_IDS ?? '')
+      .split(',')
+      .map((value) => value.trim())
+      .filter((value) => /^\d+$/.test(value))
+  );
+}
+
+function isAdminTelegramUserId(telegramUserId: string) {
+  return configuredAdminTelegramIds().has(telegramUserId);
+}
+
+async function requireAdminUserId(request: FastifyRequest) {
+  const userId = await requireUserId(request);
+  const user = await prisma.user.findUnique({
+    where: { id: userId },
+    select: { telegramUserId: true }
+  });
+
+  if (!user || !isAdminTelegramUserId(user.telegramUserId)) {
+    throw Object.assign(new Error('Forbidden'), { statusCode: 403 });
+  }
+
+  return userId;
+}
+
 
 const regionSearchSchema = z.object({
   voivodeship: z.enum(VOIVODESHIPS),
@@ -247,7 +274,8 @@ app.post('/v1/auth/telegram', async (request, reply) => {
         username: user.telegramUsername,
         profile: user.profile,
         fundingProfile: user.fundingProfile,
-        notificationPreference: user.notificationPreference
+        notificationPreference: user.notificationPreference,
+        isAdmin: isAdminTelegramUserId(user.telegramUserId)
       }
     };
   } catch (error) {
