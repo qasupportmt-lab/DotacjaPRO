@@ -7,6 +7,7 @@ import {
   assessLocalCriteria,
   buildLocalCriterionQuestions,
   qualifyPupStartup,
+  routeFundingProgramCandidates,
   QUALIFICATION_ENGINE_VERSION
 } from '@dotacjapro/rules';
 import { validateTelegramInitData } from './security/telegram.js';
@@ -1214,6 +1215,40 @@ app.post('/v1/cases/:caseId/qualify', async (request, reply) => {
     priorNonRepayableStartupAid: funding?.priorNonRepayableStartupAid
   });
 
+  const programCandidates = routeFundingProgramCandidates({
+    employmentStatus: funding?.employmentStatus,
+    wantsToStartBusiness: funding?.wantsToStartBusiness,
+    voivodeship: profile?.voivodeship,
+    municipality: profile?.municipality,
+    regionVerified: profile?.regionVerified,
+    pupOfficeId: profile?.pupOfficeId,
+    businessActiveLast12Months: funding?.businessActiveLast12Months,
+    priorNonRepayableStartupAid: funding?.priorNonRepayableStartupAid,
+    existingBusinessLegalForm: funding?.existingBusinessLegalForm,
+    wantsPfronPath: funding?.wantsPfronPath
+  });
+
+  const programCodes = programCandidates.map((candidate) => candidate.code);
+  const programRegistry = programCodes.length > 0
+    ? await prisma.fundingProgram.findMany({
+        where: {
+          code: { in: programCodes },
+          active: true
+        },
+        select: {
+          id: true,
+          code: true,
+          name: true,
+          category: true,
+          financingType: true,
+          scope: true,
+          officialUrl: true,
+          verificationStatus: true,
+          verifiedAt: true
+        }
+      })
+    : [];
+
   const activeCalls = profile?.pupOfficeId
     ? await prisma.fundingCall.findMany({
         where: {
@@ -1276,6 +1311,10 @@ app.post('/v1/cases/:caseId/qualify', async (request, reply) => {
     engineVersion: QUALIFICATION_ENGINE_VERSION,
     generatedAt: new Date().toISOString(),
     caseId,
+    programCandidates: programCandidates.map((candidate) => ({
+      ...candidate,
+      program: programRegistry.find((program) => program.code === candidate.code) ?? null
+    })),
     paths: [{
       ...pup,
       activeCalls: activeCalls.map((call) => ({
