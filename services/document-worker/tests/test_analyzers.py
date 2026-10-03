@@ -19,6 +19,7 @@ def test_pdf_acroform_analysis_proposes_draft_field():
         width=180,
         height=20,
     )
+    c.showPage()
     c.save()
 
     result = analyze_pdf(stream.getvalue())
