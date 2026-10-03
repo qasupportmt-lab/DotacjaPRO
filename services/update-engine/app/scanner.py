@@ -88,3 +88,13 @@ async def scan_all_sources() -> dict:
             "errors": len(errors),
             "results": results
         }
+
+
+async def build_morning_digests() -> dict:
+    async with httpx.AsyncClient(timeout=30.0) as client:
+        response = await client.post(
+            f"{API_BASE_URL}/v1/internal/build-digests",
+            headers=worker_headers()
+        )
+        response.raise_for_status()
+        return response.json()
