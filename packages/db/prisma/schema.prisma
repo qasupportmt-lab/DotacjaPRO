@@ -9,13 +9,14 @@ datasource db {
 
 model User {
   id                    String   @id @default(cuid())
-  telegramUserId        String   @unique
+  telegramUserId        String?  @unique
   telegramUsername      String?
   telegramFirstName     String?
   telegramLastName      String?
   preferredLanguage     String   @default("pl")
   email                 String?  @unique
   emailVerifiedAt       DateTime?
+  webPasswordHash       String?
   createdAt             DateTime @default(now())
   updatedAt             DateTime @updatedAt
   profile               UserProfile?
