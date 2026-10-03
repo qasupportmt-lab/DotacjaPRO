@@ -42,10 +42,29 @@ type ActiveCall = {
   localCriteria: LocalCriteriaSet | null;
 };
 
+type FundingProgramCandidate = {
+  code: string;
+  reason: string;
+  priority: number;
+  requiresVerifiedCall: boolean;
+  program: {
+    id: string;
+    code: string;
+    name: string;
+    category: string;
+    financingType: string;
+    scope: string;
+    officialUrl: string | null;
+    verificationStatus: string;
+    verifiedAt: string | null;
+  } | null;
+};
+
 type QualificationView = {
   status: string;
   summary: string;
   activeCalls: ActiveCall[];
+  programCandidates: FundingProgramCandidate[];
 };
 
 type CriterionQuestion = {
@@ -1294,6 +1313,49 @@ export default function Home() {
           {qualification ? <>
             <p className="qualification-status">{qualification.status}</p>
             <p>{qualification.summary}</p>
+
+            {qualification.programCandidates.length > 0 && (
+              <section className="program-candidates">
+                <h2>Możliwe ścieżki finansowania</h2>
+                <p className="call-meta">
+                  To są kierunki do sprawdzenia na podstawie Twojego profilu. Sam wpis na liście nie oznacza aktywnego naboru ani przyznania finansowania.
+                </p>
+                <div className="calls">
+                  {qualification.programCandidates.map((candidate) => (
+                    <div className="call-card" key={candidate.code}>
+                      <div className="call-head">
+                        <strong>{candidate.program?.name ?? candidate.code}</strong>
+                        <span className={
+                          candidate.program?.verificationStatus === 'VERIFIED'
+                            ? 'verified'
+                            : 'qualification-status'
+                        }>
+                          {candidate.program?.verificationStatus === 'VERIFIED'
+                            ? 'Źródło programu zweryfikowane'
+                            : 'Wymaga sprawdzenia aktualnego naboru'}
+                        </span>
+                      </div>
+                      <p>{candidate.reason}</p>
+                      <p className="call-meta">
+                        {candidate.requiresVerifiedCall
+                          ? 'DotacjaPRO pokaże konkretny nabór dopiero po weryfikacji jego oficjalnych zasad.'
+                          : 'Warunki tej ścieżki są weryfikowane przed przedstawieniem konkretnej oferty.'}
+                      </p>
+                      {candidate.program?.officialUrl && (
+                        <a
+                          className="source-link"
+                          href={candidate.program.officialUrl}
+                          target="_blank"
+                          rel="noreferrer"
+                        >
+                          Oficjalne źródło programu
+                        </a>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              </section>
+            )}
 
             {qualification.activeCalls.length > 0 ? (
               <div className="funding-list">
