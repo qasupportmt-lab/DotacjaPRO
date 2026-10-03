@@ -11,7 +11,7 @@ MAX_POINTS_RE = re.compile(
 
 MIN_POINTS_PATTERNS = [
     re.compile(
-        r"(?:nie\s+niższ[aąe]?\s+niż|co\s+najmniej|min(?:imum)?\.?)[^\d]{0,80}(\d+(?:[.,]\d+)?)\s*punkt",
+        r"(?:nie\s+niższ\w*\s+niż|co\s+najmniej|min(?:imum)?\.?)[^\d]{0,80}(\d+(?:[.,]\d+)?)\s*punkt",
         flags=re.IGNORECASE,
     ),
     re.compile(
