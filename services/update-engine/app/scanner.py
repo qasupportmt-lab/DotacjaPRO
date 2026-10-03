@@ -5,6 +5,8 @@ from datetime import datetime, timezone
 
 import httpx
 
+from .pup_directory import parse_pup_directory
+
 API_BASE_URL = os.getenv("API_BASE_URL", "http://localhost:4000")
 WORKER_SECRET = os.getenv("INTERNAL_WORKER_SECRET", "")
 USER_AGENT = "DotacjaPRO-UpdateEngine/0.1 (+official-source-monitor)"
@@ -14,6 +16,32 @@ def worker_headers() -> dict[str, str]:
     if not WORKER_SECRET:
         raise RuntimeError("INTERNAL_WORKER_SECRET is required")
     return {"x-worker-secret": WORKER_SECRET}
+
+
+async def import_pup_directory(
+    client: httpx.AsyncClient,
+    source: dict,
+    html: str
+) -> dict:
+    voivodeship = source.get("scopeVoivodeship")
+    if not voivodeship:
+        raise RuntimeError("PUP_DIRECTORY source requires scopeVoivodeship")
+
+    offices = parse_pup_directory(html)
+    if not offices:
+        raise RuntimeError("No PUP offices parsed from official directory")
+
+    response = await client.post(
+        f"{API_BASE_URL}/v1/internal/pup-directory/import",
+        headers={**worker_headers(), "Content-Type": "application/json"},
+        json={
+            "sourceUrl": source["canonicalUrl"],
+            "voivodeship": voivodeship,
+            "offices": offices
+        }
+    )
+    response.raise_for_status()
+    return response.json()
 
 
 async def scan_source(client: httpx.AsyncClient, source: dict) -> dict:
@@ -47,10 +75,23 @@ async def scan_source(client: httpx.AsyncClient, source: dict) -> dict:
     )
     report.raise_for_status()
     result = report.json()
+
+    directory_import = None
+    if (
+        source.get("kind") == "PUP_DIRECTORY"
+        and response.status_code != 304
+    ):
+        directory_import = await import_pup_directory(
+            client,
+            source,
+            response.text
+        )
+
     return {
         "sourceId": source["id"],
         "url": source["canonicalUrl"],
         "httpStatus": response.status_code,
+        "directoryImport": directory_import,
         **result
     }
 
