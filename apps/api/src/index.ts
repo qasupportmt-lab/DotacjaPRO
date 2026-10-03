@@ -12,7 +12,10 @@ import {
 import { validateTelegramInitData } from './security/telegram.js';
 import { createSessionToken, verifySessionToken } from './security/session.js';
 import { VOIVODESHIPS } from './data/voivodeships.js';
-import { sendEmailVerificationCode } from './email/mailer.js';
+import {
+  emailProviderConfigured,
+  sendEmailVerificationCode
+} from './email/mailer.js';
 import { generateEmailCode, hashEmailCode, emailCodeMatches } from './security/email-code.js';
 
 const app = Fastify({ logger: true, bodyLimit: 35 * 1024 * 1024 });
@@ -249,14 +252,13 @@ app.get('/ready', async (_request, reply) => {
     'INTERNAL_WORKER_SECRET',
     'EMAIL_VERIFICATION_SECRET',
     'DOCUMENT_SIGNING_SECRET',
-    'PUBLIC_API_BASE_URL',
-    'SMTP_HOST',
-    'SMTP_USER',
-    'SMTP_PASS',
-    'SMTP_FROM'
+    'PUBLIC_API_BASE_URL'
   ];
 
   const missing = requiredEnv.filter((name) => !process.env[name]);
+  if (!emailProviderConfigured()) {
+    missing.push('EMAIL_PROVIDER');
+  }
   let database = false;
   let databaseError: string | null = null;
 
