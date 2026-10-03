@@ -32,6 +32,7 @@ def send_package_email(
     download_url: str | None,
     funding_call_title: str,
     institution_name: str,
+    message_id: str,
 ) -> None:
     config = _smtp_config()
 
@@ -39,6 +40,7 @@ def send_package_email(
     message["From"] = config["sender"]
     message["To"] = recipient
     message["Subject"] = f"DotacjaPRO — komplet dokumentów: {funding_call_title}"
+    message["Message-ID"] = f"<dotacjapro-package-{message_id}@dotacjapro.local>"
 
     text = [
         "Twój komplet dokumentów DotacjaPRO jest gotowy.",
