@@ -94,3 +94,7 @@ button:disabled { opacity: .45; cursor: default; }
 .auth-divider { display: flex; align-items: center; gap: 12px; margin: 18px 0 4px; color: var(--muted); font-size: 12px; }
 .auth-divider::before, .auth-divider::after { content: ''; flex: 1; height: 1px; background: var(--line); }
 .auth-note { margin: 14px 0 0; font-size: 12px; }
+
+.session-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin: 0 0 14px; padding: 10px 12px; border: 1px solid var(--line); border-radius: 14px; background: rgba(255,255,255,.02); }
+.session-toolbar span { color: var(--muted); font-size: 12px; font-weight: 700; }
+.session-toolbar .compact { margin: 0; }
