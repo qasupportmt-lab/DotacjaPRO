@@ -2440,9 +2440,9 @@ app.post('/v1/internal/criterion-sets/:id/verify', async (request, reply) => {
         maximumPoints: parsed.data.maximumPoints === undefined
           ? existing.maximumPoints
           : parsed.data.maximumPoints,
-        blockingRulesJson: parsed.data.blockingRulesJson === undefined
-          ? existing.blockingRulesJson
-          : parsed.data.blockingRulesJson as never,
+        ...(parsed.data.blockingRulesJson !== undefined
+          ? { blockingRulesJson: parsed.data.blockingRulesJson as never }
+          : {}),
         status: 'VERIFIED',
         verifiedAt: new Date(),
         version: { increment: 1 }
