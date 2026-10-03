@@ -8,14 +8,22 @@ datasource db {
 }
 
 model User {
-  id              String   @id @default(cuid())
-  telegramUserId  String   @unique
-  email           String?  @unique
-  emailVerifiedAt DateTime?
-  createdAt       DateTime @default(now())
-  updatedAt       DateTime @updatedAt
-  profile         UserProfile?
-  cases           Case[]
+  id                    String   @id @default(cuid())
+  telegramUserId        String   @unique
+  telegramUsername      String?
+  telegramFirstName     String?
+  telegramLastName      String?
+  preferredLanguage     String   @default("pl")
+  email                 String?  @unique
+  emailVerifiedAt       DateTime?
+  createdAt             DateTime @default(now())
+  updatedAt             DateTime @updatedAt
+  profile               UserProfile?
+  fundingProfile        FundingProfile?
+  notificationPreference NotificationPreference?
+  cases                 Case[]
+  notifications         Notification[]
+  auditEvents           AuditEvent[]
 }
 
 model UserProfile {
@@ -30,6 +38,37 @@ model UserProfile {
   pupOfficeId    String?
   wupOfficeId    String?
   lgdId          String?
+  regionVerified Boolean @default(false)
+  regionSource   String?
+}
+
+model FundingProfile {
+  id                            String @id @default(cuid())
+  userId                        String @unique
+  user                          User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  employmentStatus              String?
+  wantsToStartBusiness          Boolean?
+  existingBusinessLegalForm    String?
+  plannedLegalForm              String?
+  plannedBusinessDescription    String?
+  plannedPkd                    String[]
+  businessActiveLast12Months    Boolean?
+  priorNonRepayableStartupAid   Boolean?
+  wantsPfronPath                Boolean @default(false)
+  updatedAt                     DateTime @updatedAt
+}
+
+model NotificationPreference {
+  id                 String  @id @default(cuid())
+  userId             String  @unique
+  user               User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  morningDigest      Boolean @default(true)
+  criticalAlerts     Boolean @default(true)
+  newCalls           Boolean @default(true)
+  legalChanges       Boolean @default(true)
+  caseChanges        Boolean @default(true)
+  marketing          Boolean @default(false)
+  telegramWriteAccess Boolean @default(false)
 }
 
 model Institution {
@@ -42,6 +81,25 @@ model Institution {
   officialUrl  String
   sources      Source[]
   calls        FundingCall[]
+  assignments  RegionAssignment[]
+}
+
+model RegionAssignment {
+  id             String @id @default(cuid())
+  voivodeship    String
+  county         String?
+  municipality   String?
+  city           String?
+  postalCodeFrom String?
+  postalCodeTo   String?
+  institutionId  String
+  institution    Institution @relation(fields: [institutionId], references: [id], onDelete: Cascade)
+  role           String
+  validFrom      DateTime?
+  validTo        DateTime?
+  sourceUrl      String
+  verifiedAt     DateTime
+  @@index([voivodeship, county, municipality, city])
 }
 
 model Source {
@@ -69,6 +127,7 @@ model SourceDocument {
   validTo       DateTime?
   downloadedAt  DateTime @default(now())
   formTemplates OfficialFormTemplate[]
+  @@unique([sourceId, sha256])
 }
 
 model OfficialFormTemplate {
@@ -82,6 +141,7 @@ model OfficialFormTemplate {
   active           Boolean @default(true)
   officialOnly     Boolean @default(true)
   fieldMappings    FormFieldMapping[]
+  @@index([institutionId, programCode, active])
 }
 
 model FormFieldMapping {
@@ -92,6 +152,8 @@ model FormFieldMapping {
   sourcePath String
   inputType  String
   required   Boolean @default(false)
+  helpText   String?
+  @@unique([templateId, fieldKey])
 }
 
 model FundingCall {
@@ -104,7 +166,10 @@ model FundingCall {
   opensAt        DateTime?
   closesAt       DateTime?
   untilExhausted Boolean  @default(false)
+  officialUrl    String?
   verifiedAt     DateTime?
+  cases          Case[]
+  @@index([status, opensAt, closesAt])
 }
 
 model Case {
@@ -114,6 +179,7 @@ model Case {
   status             String
   caseType           String
   fundingCallId      String?
+  fundingCall        FundingCall? @relation(fields: [fundingCallId], references: [id])
   legalSnapshotId    String?
   formTemplateId     String?
   submittedAt        DateTime?
@@ -121,6 +187,7 @@ model Case {
   updatedAt          DateTime @updatedAt
   answers            CaseAnswer[]
   documents          CaseDocument[]
+  @@index([userId, status])
 }
 
 model CaseAnswer {
@@ -130,6 +197,7 @@ model CaseAnswer {
   fieldKey  String
   valueJson Json
   version   Int @default(1)
+  @@unique([caseId, fieldKey, version])
 }
 
 model CaseDocument {
@@ -152,15 +220,34 @@ model ChangeEvent {
   effectiveFrom DateTime?
   summary       String
   verified      Boolean @default(false)
+  verificationScore Int?
+  payload       Json?
+  @@index([severity, verified, detectedAt])
 }
 
 model Notification {
   id          String   @id @default(cuid())
   userId      String
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
   category    String
   priority    String
   title       String
   body        String
   scheduledAt DateTime?
   sentAt      DateTime?
+  changeEventId String?
+  @@index([userId, scheduledAt, sentAt])
+}
+
+model AuditEvent {
+  id        String   @id @default(cuid())
+  userId    String?
+  user      User?    @relation(fields: [userId], references: [id], onDelete: SetNull)
+  actorType String
+  action    String
+  entity    String
+  entityId  String?
+  metadata  Json?
+  createdAt DateTime @default(now())
+  @@index([entity, entityId, createdAt])
 }
