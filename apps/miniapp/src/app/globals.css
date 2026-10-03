@@ -66,3 +66,24 @@ button:disabled { opacity: .45; cursor: default; }
 .criterion-flags { display: flex; flex-wrap: wrap; gap: 7px; margin-top: 9px; }
 .criterion-flags span { display: inline-flex; align-items: center; min-height: 24px; padding: 4px 8px; border-radius: 999px; border: 1px solid var(--line); color: var(--muted); font-size: 10px; font-weight: 800; letter-spacing: .03em; }
 .criterion-flags .warning-chip { color: #ffd49a; border-color: rgba(255,212,154,.34); }
+
+.admin-toolbar { margin: 0 0 14px; }
+.admin-panel { margin-bottom: 18px; }
+.admin-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 14px; }
+.admin-head h2 { margin-top: 6px; }
+.compact { width: auto; min-width: 120px; margin-top: 0; padding: 10px 13px; }
+.admin-groups { display: grid; gap: 18px; margin-top: 18px; }
+.admin-group { display: grid; gap: 10px; }
+.admin-group h3 { margin: 0; font-size: 16px; }
+.admin-item { border: 1px solid var(--line); border-radius: 15px; padding: 14px; background: var(--panel-2); }
+.admin-item > strong { display: block; font-size: 14px; line-height: 1.35; }
+.admin-item p { margin: 7px 0; font-size: 12px; }
+.admin-item pre { max-height: 280px; overflow: auto; margin: 10px 0; padding: 11px; border-radius: 10px; background: rgba(0,0,0,.24); color: #dbe7e1; font: 11px/1.45 ui-monospace, SFMono-Regular, Menlo, monospace; white-space: pre-wrap; word-break: break-word; }
+.admin-item details { margin-top: 10px; }
+.admin-item summary { cursor: pointer; color: var(--accent); font-size: 12px; font-weight: 750; }
+.forms-panel, .package-panel { margin-top: 18px; padding-top: 16px; border-top: 1px solid var(--line); }
+.forms-list { display: grid; gap: 12px; margin-top: 12px; }
+.form-card { border: 1px solid var(--line); border-radius: 14px; padding: 13px; background: var(--panel-2); }
+.form-questions { margin-top: 12px; }
+.render-state, .package-panel { border-radius: 14px; }
+.render-state { margin-top: 12px; padding: 12px; border: 1px solid var(--line); background: rgba(126,242,167,.035); }
