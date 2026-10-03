@@ -4920,6 +4920,10 @@ await app.listen({ port, host: '0.0.0.0' });
 
 const smtpSmokeTestTo = process.env.SMTP_SMOKE_TEST_TO?.trim();
 if (smtpSmokeTestTo) {
+  app.log.info(
+    { recipientDomain: smtpSmokeTestTo.split('@')[1] ?? 'unknown' },
+    'SMTP_SMOKE_TEST_START'
+  );
   void sendEmailVerificationCode(smtpSmokeTestTo, '123456')
     .then(() => {
       app.log.info(
