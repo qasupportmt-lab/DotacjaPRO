@@ -156,6 +156,7 @@ model OfficialFormTemplate {
   mappingVerifiedAt DateTime?
   mappingVersion   Int     @default(1)
   fieldMappings    FormFieldMapping[]
+  renderJobs       DocumentRenderJob[]
   @@index([institutionId, programCode, active])
 }
 
@@ -208,6 +209,7 @@ model Case {
   updatedAt          DateTime @updatedAt
   answers            CaseAnswer[]
   documents          CaseDocument[]
+  renderJobs          DocumentRenderJob[]
   @@index([userId, status])
 }
 
@@ -222,14 +224,18 @@ model CaseAnswer {
 }
 
 model CaseDocument {
-  id             String   @id @default(cuid())
-  caseId         String
-  case           Case     @relation(fields: [caseId], references: [id], onDelete: Cascade)
-  type           String
-  storageKey     String
-  officialSource Boolean  @default(false)
-  templateHash   String?
-  createdAt      DateTime @default(now())
+  id               String   @id @default(cuid())
+  caseId           String
+  case             Case     @relation(fields: [caseId], references: [id], onDelete: Cascade)
+  type             String
+  originalName     String?
+  mimeType         String?
+  storageKey       String
+  officialSource   Boolean  @default(false)
+  templateHash     String?
+  sourceDocumentId String?
+  renderJobId      String?  @unique
+  createdAt        DateTime @default(now())
 }
 
 model ChangeEvent {
@@ -293,17 +299,21 @@ model EmailVerification {
 
 
 model DocumentRenderJob {
-  id             String   @id @default(cuid())
-  caseId         String
-  templateId     String
-  status         String   @default("QUEUED")
+  id               String   @id @default(cuid())
+  caseId           String
+  case             Case     @relation(fields: [caseId], references: [id], onDelete: Cascade)
+  templateId       String
+  template         OfficialFormTemplate @relation(fields: [templateId], references: [id])
+  status           String   @default("QUEUED")
   outputStorageKey String?
-  outputSha256   String?
-  errorCode      String?
-  errorMessage   String?
-  requestedAt    DateTime @default(now())
-  startedAt      DateTime?
-  completedAt    DateTime?
+  outputSha256     String?
+  outputMimeType   String?
+  outputName       String?
+  errorCode        String?
+  errorMessage     String?
+  requestedAt      DateTime @default(now())
+  startedAt        DateTime?
+  completedAt      DateTime?
   @@index([status, requestedAt])
   @@index([caseId, templateId])
 }
