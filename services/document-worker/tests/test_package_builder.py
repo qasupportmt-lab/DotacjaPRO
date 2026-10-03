@@ -82,6 +82,8 @@ def test_build_package_contains_documents_instruction_and_manifest(monkeypatch):
         assert "01_dokumenty/zalacznik.docx" in names
         assert "00_INSTRUKCJA_ZLOZENIA.html" in names
         assert "00_INSTRUKCJA_ZLOZENIA.txt" in names
+        assert "00_WARUNKI_LICENCJA_RODO.html" in names
+        assert "00_WARUNKI_LICENCJA_RODO.txt" in names
         assert "99_MANIFEST.json" in names
 
         instruction = archive.read("00_INSTRUKCJA_ZLOZENIA.txt").decode("utf-8")
@@ -93,6 +95,9 @@ def test_build_package_contains_documents_instruction_and_manifest(monkeypatch):
             archive.read("99_MANIFEST.json").decode("utf-8")
         )
         assert manifest["caseId"] == "case-123"
+        assert manifest["legal"]["included"] is True
+        assert manifest["legal"]["version"]
+        assert "00_WARUNKI_LICENCJA_RODO.txt" in manifest["legal"]["files"]
         assert len(manifest["documents"]) == 2
         assert manifest["documents"][0]["sha256"] == hashlib.sha256(b"FORM A").hexdigest()
 
