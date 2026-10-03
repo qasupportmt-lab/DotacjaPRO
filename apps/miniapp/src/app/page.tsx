@@ -125,6 +125,14 @@ type PackageJobView = {
   errorCode: string | null;
 };
 
+type AdminReviewQueue = {
+  fundingCalls: Array<Record<string, any>>;
+  submissionInstructions: Array<Record<string, any>>;
+  criterionSets: Array<Record<string, any>>;
+  formTemplates: Array<Record<string, any>>;
+};
+
+
 
 const API = process.env.NEXT_PUBLIC_API_BASE_URL ?? 'http://localhost:4000';
 
@@ -172,6 +180,10 @@ export default function Home() {
   const [renderJob, setRenderJob] = useState<RenderJobView | null>(null);
   const [packageJob, setPackageJob] = useState<PackageJobView | null>(null);
   const [packageMessage, setPackageMessage] = useState<string | null>(null);
+  const [isAdmin, setIsAdmin] = useState(false);
+  const [adminMode, setAdminMode] = useState(false);
+  const [adminQueue, setAdminQueue] = useState<AdminReviewQueue | null>(null);
+  const [adminMessage, setAdminMessage] = useState<string | null>(null);
 
   const authHeaders = useMemo(
     () => token ? { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' } : undefined,
@@ -371,6 +383,7 @@ export default function Home() {
 
       const data = await res.json();
       setToken(data.token);
+      setIsAdmin(Boolean(data.user?.isAdmin));
       setStep('region');
 
       const requestWriteAccess = window.Telegram?.WebApp?.requestWriteAccess;
@@ -381,6 +394,159 @@ export default function Home() {
       }
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Błąd logowania');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function loadAdminQueue(sessionToken = token) {
+    if (!sessionToken) return;
+    setBusy(true);
+    setError(null);
+
+    try {
+      const res = await fetch(
+        `${API}/v1/admin/review-queue`,
+        {
+          headers: {
+            Authorization: `Bearer ${sessionToken}`,
+            'Content-Type': 'application/json'
+          }
+        }
+      );
+
+      if (!res.ok) {
+        throw new Error('Nie udało się pobrać kolejki weryfikacji.');
+      }
+
+      const data = await res.json();
+      setAdminQueue(data);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Błąd panelu administratora');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function toggleAdminMode() {
+    const next = !adminMode;
+    setAdminMode(next);
+    setAdminMessage(null);
+    if (next && !adminQueue) {
+      await loadAdminQueue();
+    }
+  }
+
+  async function adminPost(url: string, body: unknown) {
+    if (!token) return;
+    setBusy(true);
+    setError(null);
+    setAdminMessage(null);
+
+    try {
+      const res = await fetch(`${API}${url}`, {
+        method: 'POST',
+        headers: authHeaders,
+        body: JSON.stringify(body)
+      });
+
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        throw new Error(data.error ?? 'Weryfikacja nie powiodła się.');
+      }
+
+      setAdminMessage('Zweryfikowano i zapisano.');
+      await loadAdminQueue(token);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Błąd weryfikacji');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function adminVerifyFundingCall(item: Record<string, any>) {
+    const evidence = item.evidenceJson ?? {};
+    const status = evidence.candidateStatus;
+
+    if (!['ANNOUNCED', 'OPEN', 'CLOSED', 'SUSPENDED'].includes(status)) {
+      setError('Automat nie wykrył statusu wystarczającego do zatwierdzenia. Sprawdź źródło ręcznie.');
+      return;
+    }
+
+    await adminPost(
+      `/v1/admin/funding-calls/${item.id}/verify`,
+      {
+        status,
+        opensAt: evidence.candidateOpensAt ?? null,
+        closesAt: evidence.candidateClosesAt ?? null,
+        untilExhausted: Boolean(evidence.candidateUntilExhausted),
+        programCode: item.programCode ?? null
+      }
+    );
+  }
+
+  async function adminVerifySubmissionInstruction(item: Record<string, any>) {
+    await adminPost(
+      `/v1/admin/submission-instructions/${item.id}/verify`,
+      {}
+    );
+  }
+
+  async function adminVerifyCriterionSet(item: Record<string, any>) {
+    await adminPost(
+      `/v1/admin/criterion-sets/${item.id}/verify`,
+      {}
+    );
+  }
+
+  async function adminVerifyTemplate(item: Record<string, any>) {
+    if (!token) return;
+    setBusy(true);
+    setError(null);
+    setAdminMessage(null);
+
+    try {
+      const mappings = (item.fieldMappings ?? []).map((mapping: Record<string, any>) => ({
+        fieldKey: mapping.fieldKey,
+        sourcePath: mapping.sourcePath ?? '',
+        locatorType: mapping.locatorType,
+        ...(mapping.locatorJson ? { locatorJson: mapping.locatorJson } : {}),
+        inputType: mapping.inputType,
+        ...(mapping.questionLabel ? { questionLabel: mapping.questionLabel } : {}),
+        ...(mapping.section ? { section: mapping.section } : {}),
+        sortOrder: mapping.sortOrder ?? 0,
+        required: Boolean(mapping.required),
+        ...(mapping.helpText ? { helpText: mapping.helpText } : {}),
+        ...(mapping.validationJson ? { validationJson: mapping.validationJson } : {})
+      }));
+
+      if (mappings.length === 0) {
+        throw new Error('Brak mapowania pól do zatwierdzenia.');
+      }
+
+      const res = await fetch(
+        `${API}/v1/admin/templates/${item.id}/mappings`,
+        {
+          method: 'PUT',
+          headers: authHeaders,
+          body: JSON.stringify({
+            mappingStatus: 'VERIFIED',
+            requiredForPackage: true,
+            analysis: item.mappingAnalysisJson ?? undefined,
+            mappings
+          })
+        }
+      );
+
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        throw new Error(data.error ?? 'Nie udało się zatwierdzić mapowania.');
+      }
+
+      setAdminMessage('Mapowanie formularza zostało zatwierdzone.');
+      await loadAdminQueue(token);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Błąd mapowania');
     } finally {
       setBusy(false);
     }
@@ -884,6 +1050,144 @@ export default function Home() {
         <h1>Twoja droga do finansowania firmy</h1>
         <p>Ustalimy Twój region i sytuację, dopasujemy programy, a dokumenty przygotujemy wyłącznie na aktualnych, oficjalnych formularzach.</p>
       </section>
+
+      {isAdmin && (
+        <section className="admin-toolbar">
+          <button className="secondary" onClick={toggleAdminMode} disabled={busy}>
+            {adminMode ? 'Ukryj panel weryfikacji' : 'Panel weryfikacji administratora'}
+          </button>
+        </section>
+      )}
+
+      {isAdmin && adminMode && (
+        <section className="card admin-panel">
+          <div className="admin-head">
+            <div>
+              <span className="eyebrow">ADMIN</span>
+              <h2>Kolejka weryfikacji</h2>
+              <p>Każdy element musi zostać porównany z podlinkowanym źródłem urzędowym przed zatwierdzeniem.</p>
+            </div>
+            <button className="secondary compact" onClick={() => loadAdminQueue()} disabled={busy}>
+              Odśwież
+            </button>
+          </div>
+
+          {adminMessage && <p className="verified">{adminMessage}</p>}
+
+          {!adminQueue ? (
+            <p>Ładowanie kolejki…</p>
+          ) : (
+            <div className="admin-groups">
+              <div className="admin-group">
+                <h3>Nabory — {adminQueue.fundingCalls.length}</h3>
+                {adminQueue.fundingCalls.map((item) => (
+                  <div className="admin-item" key={item.id}>
+                    <strong>{item.title}</strong>
+                    <p>{item.institution?.name}</p>
+                    {item.officialUrl && (
+                      <a className="source-link" href={item.officialUrl} target="_blank" rel="noreferrer">
+                        Oficjalne ogłoszenie
+                      </a>
+                    )}
+                    <pre>{JSON.stringify(item.evidenceJson ?? {}, null, 2)}</pre>
+                    <button
+                      onClick={() => adminVerifyFundingCall(item)}
+                      disabled={
+                        busy ||
+                        !['ANNOUNCED','OPEN','CLOSED','SUSPENDED'].includes(
+                          item.evidenceJson?.candidateStatus
+                        )
+                      }
+                    >
+                      Zatwierdź wykryty status i terminy
+                    </button>
+                  </div>
+                ))}
+              </div>
+
+              <div className="admin-group">
+                <h3>Instrukcje złożenia — {adminQueue.submissionInstructions.length}</h3>
+                {adminQueue.submissionInstructions.map((item) => (
+                  <div className="admin-item" key={item.id}>
+                    <strong>{item.fundingCall?.title}</strong>
+                    <a className="source-link" href={item.sourceUrl} target="_blank" rel="noreferrer">
+                      Źródło instrukcji
+                    </a>
+                    <pre>{JSON.stringify(item.instructionJson ?? {}, null, 2)}</pre>
+                    <button onClick={() => adminVerifySubmissionInstruction(item)} disabled={busy}>
+                      Zatwierdź instrukcję
+                    </button>
+                  </div>
+                ))}
+              </div>
+
+              <div className="admin-group">
+                <h3>Kryteria — {adminQueue.criterionSets.length}</h3>
+                {adminQueue.criterionSets.map((item) => (
+                  <div className="admin-item" key={item.id}>
+                    <strong>{item.title}</strong>
+                    <p>{item.fundingCall?.title ?? 'Bez przypisanego naboru'}</p>
+                    <a
+                      className="source-link"
+                      href={item.sourceDocument?.source?.canonicalUrl}
+                      target="_blank"
+                      rel="noreferrer"
+                    >
+                      Oficjalny dokument kryteriów
+                    </a>
+                    <p>
+                      Kryteriów: {item.criteria?.length ?? 0}
+                      {' · '}
+                      próg: {item.minimumPoints ?? 'brak'}
+                      {' · '}
+                      max: {item.maximumPoints ?? 'brak'}
+                    </p>
+                    <details>
+                      <summary>Pokaż wykryte kryteria</summary>
+                      <pre>{JSON.stringify(item.criteria ?? [], null, 2)}</pre>
+                    </details>
+                    <button onClick={() => adminVerifyCriterionSet(item)} disabled={busy}>
+                      Zatwierdź zestaw kryteriów
+                    </button>
+                  </div>
+                ))}
+              </div>
+
+              <div className="admin-group">
+                <h3>Mapowania formularzy — {adminQueue.formTemplates.length}</h3>
+                {adminQueue.formTemplates.map((item) => (
+                  <div className="admin-item" key={item.id}>
+                    <strong>{item.sourceDocument?.originalName}</strong>
+                    <p>
+                      Status: {item.mappingStatus}
+                      {' · '}
+                      pól: {item.fieldMappings?.length ?? 0}
+                    </p>
+                    <a
+                      className="source-link"
+                      href={item.sourceDocument?.source?.canonicalUrl}
+                      target="_blank"
+                      rel="noreferrer"
+                    >
+                      Oficjalny formularz
+                    </a>
+                    <details>
+                      <summary>Pokaż mapowanie pól</summary>
+                      <pre>{JSON.stringify(item.fieldMappings ?? [], null, 2)}</pre>
+                    </details>
+                    <button
+                      onClick={() => adminVerifyTemplate(item)}
+                      disabled={busy || item.mappingStatus !== 'DRAFT' || !item.fieldMappings?.length}
+                    >
+                      Zatwierdź mapowanie formularza
+                    </button>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+        </section>
+      )}
 
       <section className="card">
         <div className="progress">
