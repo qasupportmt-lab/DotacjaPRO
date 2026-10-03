@@ -1,6 +1,7 @@
 import os
 from datetime import datetime
 
+import httpx
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from fastapi import FastAPI, Header, HTTPException, Request
 from zoneinfo import ZoneInfo
