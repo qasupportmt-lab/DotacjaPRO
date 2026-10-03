@@ -73,6 +73,7 @@ model NotificationPreference {
 
 model Institution {
   id           String @id @default(cuid())
+  code         String @unique
   type         String
   name         String
   voivodeship  String?
