@@ -60,7 +60,9 @@ function createStorageDownloadToken(
   return `${encoded}.${signature}`;
 }
 
-function verifyStorageDownloadToken(token: string) {
+function verifyStorageDownloadToken(
+  token: string
+): { storageKey: string; exp: number } | null {
   const [encoded, signature] = token.split('.');
   if (!encoded || !signature) return null;
 
@@ -82,7 +84,10 @@ function verifyStorageDownloadToken(token: string) {
       return null;
     }
 
-    return payload;
+    return {
+      storageKey: payload.storageKey,
+      exp: payload.exp
+    };
   } catch {
     return null;
   }
@@ -108,6 +113,7 @@ app.put('/v1/internal/storage/object', async (request, reply) => {
   }
 
   const actualHash = crypto.createHash('sha256').update(body).digest('hex');
+  const contentBytes = Uint8Array.from(body) as Uint8Array<ArrayBuffer>;
   if (declaredHash && declaredHash !== actualHash) {
     return reply.code(409).send({ error: 'STORAGE_HASH_MISMATCH' });
   }
@@ -118,14 +124,14 @@ app.put('/v1/internal/storage/object', async (request, reply) => {
       mimeType,
       sha256: actualHash,
       sizeBytes: body.length,
-      content: body
+      content: contentBytes
     },
     create: {
       storageKey,
       mimeType,
       sha256: actualHash,
       sizeBytes: body.length,
-      content: body
+      content: contentBytes
     },
     select: {
       storageKey: true,
