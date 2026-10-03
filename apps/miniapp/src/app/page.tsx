@@ -80,6 +80,36 @@ type CriterionAssessment = {
   }>;
 };
 
+type OfficialForm = {
+  id: string;
+  formCode: string;
+  versionLabel: string | null;
+  mappingVersion: number;
+  originalName: string;
+  mimeType: string;
+  sha256: string;
+  officialSourceUrl: string;
+  officialSourceName: string | null;
+};
+
+type FormQuestion = {
+  fieldKey: string;
+  label: string;
+  section: string | null;
+  inputType: string;
+  required: boolean;
+  helpText: string | null;
+  validation: unknown;
+  value: unknown;
+};
+
+type RenderJobView = {
+  id: string;
+  status: string;
+  outputName: string | null;
+  errorCode: string | null;
+};
+
 const API = process.env.NEXT_PUBLIC_API_BASE_URL ?? 'http://localhost:4000';
 
 export default function Home() {
@@ -119,6 +149,11 @@ export default function Home() {
   const [criterionQuestions, setCriterionQuestions] = useState<CriterionQuestion[]>([]);
   const [criterionAnswers, setCriterionAnswers] = useState<Record<string, string | number | boolean | null>>({});
   const [criterionAssessment, setCriterionAssessment] = useState<CriterionAssessment | null>(null);
+  const [officialForms, setOfficialForms] = useState<OfficialForm[]>([]);
+  const [selectedTemplateId, setSelectedTemplateId] = useState<string | null>(null);
+  const [formQuestions, setFormQuestions] = useState<FormQuestion[]>([]);
+  const [formAnswers, setFormAnswers] = useState<Record<string, unknown>>({});
+  const [renderJob, setRenderJob] = useState<RenderJobView | null>(null);
 
   const authHeaders = useMemo(
     () => token ? { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' } : undefined,
@@ -147,6 +182,38 @@ export default function Home() {
     webApp?.ready();
     webApp?.expand();
   }, []);
+
+  useEffect(() => {
+    if (
+      !caseId ||
+      !renderJob ||
+      !['QUEUED', 'PROCESSING'].includes(renderJob.status)
+    ) {
+      return;
+    }
+
+    const timer = window.setInterval(async () => {
+      try {
+        const res = await fetch(
+          `${API}/v1/cases/${caseId}/render-jobs/${renderJob.id}`,
+          { headers: authHeaders }
+        );
+        if (!res.ok) return;
+
+        const data = await res.json();
+        setRenderJob({
+          id: data.job.id,
+          status: data.job.status,
+          outputName: data.job.outputName ?? null,
+          errorCode: data.job.errorCode ?? null
+        });
+      } catch {
+        // Status można odświeżyć przy kolejnym cyklu.
+      }
+    }, 2000);
+
+    return () => window.clearInterval(timer);
+  }, [caseId, renderJob?.id, renderJob?.status, authHeaders]);
 
   useEffect(() => {
     if (step !== 'region' || !region.voivodeship || region.city.trim().length < 2) {
@@ -363,6 +430,135 @@ export default function Home() {
   }
 
 
+  async function loadOfficialForms() {
+    if (!caseId || !token) return;
+
+    const res = await fetch(
+      `${API}/v1/cases/${caseId}/official-forms`,
+      { headers: authHeaders }
+    );
+
+    if (!res.ok) {
+      const data = await res.json().catch(() => ({}));
+      if (data.error === 'FUNDING_CALL_SELECTION_REQUIRED') {
+        setOfficialForms([]);
+        return;
+      }
+      throw new Error('Nie udało się pobrać oficjalnych formularzy.');
+    }
+
+    const data = await res.json();
+    setOfficialForms(data.forms ?? []);
+  }
+
+  async function openOfficialForm(templateId: string) {
+    if (!caseId || !token) return;
+    setBusy(true);
+    setError(null);
+    setRenderJob(null);
+
+    try {
+      const params = new URLSearchParams({ templateId });
+      const res = await fetch(
+        `${API}/v1/cases/${caseId}/form-questions?${params.toString()}`,
+        { headers: authHeaders }
+      );
+
+      if (!res.ok) {
+        throw new Error('Ten formularz nie jest gotowy do bezpiecznego wypełnienia.');
+      }
+
+      const data = await res.json();
+      const questions: FormQuestion[] = data.questions ?? [];
+      const initialAnswers: Record<string, unknown> = {};
+
+      for (const question of questions) {
+        if (question.value !== null && question.value !== undefined) {
+          initialAnswers[question.fieldKey] = question.value;
+        }
+      }
+
+      setSelectedTemplateId(templateId);
+      setFormQuestions(questions);
+      setFormAnswers(initialAnswers);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Błąd formularza');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function saveAndRenderOfficialForm(templateId: string) {
+    if (!caseId || !token) return;
+    setBusy(true);
+    setError(null);
+
+    try {
+      if (formQuestions.length > 0) {
+        const answers = formQuestions.map((question) => ({
+          fieldKey: question.fieldKey,
+          value: formAnswers[question.fieldKey] ?? null
+        }));
+
+        const save = await fetch(
+          `${API}/v1/cases/${caseId}/answers`,
+          {
+            method: 'PUT',
+            headers: authHeaders,
+            body: JSON.stringify({ answers })
+          }
+        );
+
+        if (!save.ok) {
+          throw new Error('Nie udało się zapisać odpowiedzi formularza.');
+        }
+      }
+
+      const render = await fetch(
+        `${API}/v1/cases/${caseId}/render`,
+        {
+          method: 'POST',
+          headers: authHeaders,
+          body: JSON.stringify({ templateId })
+        }
+      );
+
+      if (!render.ok) {
+        const data = await render.json().catch(() => ({}));
+
+        if (data.error === 'REQUIRED_FORM_DATA_MISSING') {
+          const labels = (data.missing ?? [])
+            .map((item: { label?: string }) => item.label)
+            .filter(Boolean)
+            .join(', ');
+          throw new Error(
+            labels
+              ? `Uzupełnij wymagane pola: ${labels}`
+              : 'Uzupełnij wszystkie wymagane pola formularza.'
+          );
+        }
+
+        if (data.error === 'FORM_TEMPLATE_FUNDING_CALL_MISMATCH') {
+          throw new Error('Formularz nie należy do wybranego naboru.');
+        }
+
+        throw new Error('Nie udało się uruchomić generowania dokumentu.');
+      }
+
+      const data = await render.json();
+      setRenderJob({
+        id: data.job.id,
+        status: data.job.status,
+        outputName: data.job.outputName ?? null,
+        errorCode: data.job.errorCode ?? null
+      });
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Błąd generowania dokumentu');
+    } finally {
+      setBusy(false);
+    }
+  }
+
   async function selectFundingCall(call: ActiveCall) {
     if (!caseId || !token) return;
     setBusy(true);
@@ -394,6 +590,13 @@ export default function Home() {
       setCriterionQuestions([]);
       setCriterionAnswers({});
       setCriterionAssessment(null);
+      setOfficialForms([]);
+      setSelectedTemplateId(null);
+      setFormQuestions([]);
+      setFormAnswers({});
+      setRenderJob(null);
+
+      await loadOfficialForms();
 
       if (call.localCriteria) {
         const params = new URLSearchParams({
@@ -913,6 +1116,141 @@ export default function Home() {
                       <p className="muted-box">
                         Ten nabór jest wybrany, ale nie ma jeszcze zweryfikowanego zestawu kryteriów punktowych.
                       </p>
+                    )}
+
+                    {selectedFundingCallId === call.id && (
+                      <div className="forms-panel">
+                        <h3>Oficjalne formularze</h3>
+
+                        {officialForms.length === 0 ? (
+                          <p className="muted-box">
+                            Nie ma jeszcze zweryfikowanego mapowania formularza dla tego naboru. DotacjaPRO nie utworzy własnego zamiennika.
+                          </p>
+                        ) : (
+                          <div className="forms-list">
+                            {officialForms.map((form) => (
+                              <div className="form-card" key={form.id}>
+                                <strong>{form.officialSourceName ?? form.originalName}</strong>
+                                <p className="call-meta">
+                                  Oryginał: {form.originalName}
+                                  {' · '}
+                                  wersja {form.versionLabel ?? form.sha256.slice(0, 12)}
+                                </p>
+                                <a
+                                  className="source-link"
+                                  href={form.officialSourceUrl}
+                                  target="_blank"
+                                  rel="noreferrer"
+                                >
+                                  Otwórz źródło urzędowe
+                                </a>
+                                <button
+                                  className="secondary"
+                                  onClick={() => openOfficialForm(form.id)}
+                                  disabled={busy}
+                                >
+                                  {selectedTemplateId === form.id
+                                    ? 'Formularz otwarty'
+                                    : 'Wypełnij ten formularz'}
+                                </button>
+
+                                {selectedTemplateId === form.id && (
+                                  <div className="form-questions">
+                                    {formQuestions.map((question) => (
+                                      <label key={question.fieldKey}>
+                                        {question.label}
+                                        {question.required && <small> wymagane</small>}
+
+                                        {question.inputType === 'BOOLEAN' ? (
+                                          <select
+                                            value={
+                                              formAnswers[question.fieldKey] === true
+                                                ? 'true'
+                                                : formAnswers[question.fieldKey] === false
+                                                  ? 'false'
+                                                  : ''
+                                            }
+                                            onChange={(e) => setFormAnswers({
+                                              ...formAnswers,
+                                              [question.fieldKey]: e.target.value === ''
+                                                ? null
+                                                : e.target.value === 'true'
+                                            })}
+                                          >
+                                            <option value="">Wybierz</option>
+                                            <option value="true">Tak</option>
+                                            <option value="false">Nie</option>
+                                          </select>
+                                        ) : question.inputType === 'TEXTAREA' ? (
+                                          <textarea
+                                            rows={4}
+                                            value={String(formAnswers[question.fieldKey] ?? '')}
+                                            onChange={(e) => setFormAnswers({
+                                              ...formAnswers,
+                                              [question.fieldKey]: e.target.value
+                                            })}
+                                          />
+                                        ) : (
+                                          <input
+                                            type={
+                                              question.inputType === 'NUMBER'
+                                                ? 'number'
+                                                : question.inputType === 'DATE'
+                                                  ? 'date'
+                                                  : question.inputType === 'EMAIL'
+                                                    ? 'email'
+                                                    : 'text'
+                                            }
+                                            value={String(formAnswers[question.fieldKey] ?? '')}
+                                            onChange={(e) => setFormAnswers({
+                                              ...formAnswers,
+                                              [question.fieldKey]:
+                                                question.inputType === 'NUMBER' && e.target.value !== ''
+                                                  ? Number(e.target.value)
+                                                  : e.target.value
+                                            })}
+                                          />
+                                        )}
+
+                                        {question.helpText && (
+                                          <small>{question.helpText}</small>
+                                        )}
+                                      </label>
+                                    ))}
+
+                                    <button
+                                      onClick={() => saveAndRenderOfficialForm(form.id)}
+                                      disabled={busy || formQuestions.length === 0}
+                                    >
+                                      {busy ? 'Przygotowanie…' : 'Zapisz i przygotuj dokument urzędowy'}
+                                    </button>
+
+                                    {renderJob && (
+                                      <div className="render-state">
+                                        <strong>Status dokumentu: {renderJob.status}</strong>
+                                        {renderJob.status === 'COMPLETED' && (
+                                          <p>
+                                            Gotowe: {renderJob.outputName ?? 'wypełniony formularz'}.
+                                            Dokument zostanie dołączony do pakietu tej sprawy.
+                                          </p>
+                                        )}
+                                        {renderJob.status === 'FAILED' && (
+                                          <p className="error">
+                                            Generowanie nie powiodło się ({renderJob.errorCode ?? 'DOCUMENT_RENDER_FAILED'}).
+                                          </p>
+                                        )}
+                                        {['QUEUED', 'PROCESSING'].includes(renderJob.status) && (
+                                          <p>DotacjaPRO wypełnia kopię aktualnego formularza urzędowego.</p>
+                                        )}
+                                      </div>
+                                    )}
+                                  </div>
+                                )}
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                      </div>
                     )}
                   </section>
                 ))}
