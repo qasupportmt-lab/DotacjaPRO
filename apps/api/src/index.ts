@@ -940,6 +940,12 @@ app.post('/v1/auth/telegram', async (request, reply) => {
         id: user.id,
         firstName: user.telegramFirstName,
         username: user.telegramUsername,
+        email: user.email,
+        emailVerified: Boolean(user.emailVerifiedAt),
+        authMethods: {
+          web: Boolean(user.webPasswordHash),
+          telegram: true
+        },
         profile: user.profile,
         fundingProfile: user.fundingProfile,
         notificationPreference: user.notificationPreference,
