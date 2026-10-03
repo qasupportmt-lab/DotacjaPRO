@@ -13,7 +13,7 @@ from .renderers.dispatch import (
     render_official_document,
 )
 from .package_builder import build_package
-from .package_mailer import send_package_email
+from .package_mailer import email_provider_configured, send_package_email
 from .storage import get_bytes, put_bytes, presigned_download_url
 
 API_BASE_URL = os.getenv("API_BASE_URL", "http://localhost:4000")
@@ -490,12 +490,10 @@ async def ready():
     required = [
         "API_BASE_URL",
         "INTERNAL_WORKER_SECRET",
-        "SMTP_HOST",
-        "SMTP_USER",
-        "SMTP_PASS",
-        "SMTP_FROM",
     ]
     missing = [name for name in required if not os.getenv(name)]
+    if not email_provider_configured():
+        missing.append("EMAIL_PROVIDER")
 
     mode = os.getenv("OBJECT_STORAGE_MODE", "api").lower()
     if mode == "s3":
