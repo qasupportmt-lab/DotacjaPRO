@@ -15,11 +15,219 @@ import { VOIVODESHIPS } from './data/voivodeships.js';
 import { sendEmailVerificationCode } from './email/mailer.js';
 import { generateEmailCode, hashEmailCode, emailCodeMatches } from './security/email-code.js';
 
-const app = Fastify({ logger: true });
+const app = Fastify({ logger: true, bodyLimit: 35 * 1024 * 1024 });
 
 await app.register(cors, {
   origin: true,
   credentials: true
+});
+
+app.addContentTypeParser(
+  'application/octet-stream',
+  { parseAs: 'buffer' },
+  (_request, body, done) => done(null, body)
+);
+
+
+function storageSigningSecret() {
+  const value =
+    process.env.DOCUMENT_SIGNING_SECRET ||
+    process.env.APP_SESSION_SECRET;
+  if (!value || value.length < 32) {
+    throw Object.assign(new Error('Storage signing secret is not configured'), {
+      statusCode: 503
+    });
+  }
+  return value;
+}
+
+function signStorageDownloadPayload(payload: string) {
+  return crypto
+    .createHmac('sha256', storageSigningSecret())
+    .update(payload)
+    .digest('base64url');
+}
+
+function createStorageDownloadToken(
+  storageKey: string,
+  expiresSeconds: number
+) {
+  const exp = Math.floor(Date.now() / 1000) + expiresSeconds;
+  const encoded = Buffer
+    .from(JSON.stringify({ storageKey, exp }), 'utf8')
+    .toString('base64url');
+  const signature = signStorageDownloadPayload(encoded);
+  return `${encoded}.${signature}`;
+}
+
+function verifyStorageDownloadToken(token: string) {
+  const [encoded, signature] = token.split('.');
+  if (!encoded || !signature) return null;
+
+  const expected = signStorageDownloadPayload(encoded);
+  const a = Buffer.from(signature);
+  const b = Buffer.from(expected);
+  if (a.length !== b.length || !crypto.timingSafeEqual(a, b)) return null;
+
+  try {
+    const payload = JSON.parse(
+      Buffer.from(encoded, 'base64url').toString('utf8')
+    ) as { storageKey?: string; exp?: number };
+
+    if (
+      typeof payload.storageKey !== 'string' ||
+      typeof payload.exp !== 'number' ||
+      payload.exp < Math.floor(Date.now() / 1000)
+    ) {
+      return null;
+    }
+
+    return payload;
+  } catch {
+    return null;
+  }
+}
+
+app.put('/v1/internal/storage/object', async (request, reply) => {
+  requireWorkerSecret(request);
+
+  const storageKey = String(request.headers['x-storage-key'] ?? '');
+  const mimeType = String(
+    request.headers['x-object-content-type'] ?? 'application/octet-stream'
+  );
+  const declaredHash = String(request.headers['x-object-sha256'] ?? '');
+  const body = request.body;
+
+  if (
+    !storageKey ||
+    storageKey.length > 1500 ||
+    !Buffer.isBuffer(body) ||
+    body.length === 0
+  ) {
+    return reply.code(400).send({ error: 'INVALID_STORAGE_OBJECT' });
+  }
+
+  const actualHash = crypto.createHash('sha256').update(body).digest('hex');
+  if (declaredHash && declaredHash !== actualHash) {
+    return reply.code(409).send({ error: 'STORAGE_HASH_MISMATCH' });
+  }
+
+  const object = await prisma.storedObject.upsert({
+    where: { storageKey },
+    update: {
+      mimeType,
+      sha256: actualHash,
+      sizeBytes: body.length,
+      content: body
+    },
+    create: {
+      storageKey,
+      mimeType,
+      sha256: actualHash,
+      sizeBytes: body.length,
+      content: body
+    },
+    select: {
+      storageKey: true,
+      mimeType: true,
+      sha256: true,
+      sizeBytes: true,
+      updatedAt: true
+    }
+  });
+
+  return { object };
+});
+
+app.get('/v1/internal/storage/object', async (request, reply) => {
+  requireWorkerSecret(request);
+  const key = String(
+    (request.query as { key?: string }).key ?? ''
+  );
+
+  if (!key) {
+    return reply.code(400).send({ error: 'STORAGE_KEY_REQUIRED' });
+  }
+
+  const object = await prisma.storedObject.findUnique({
+    where: { storageKey: key }
+  });
+
+  if (!object) {
+    return reply.code(404).send({ error: 'STORAGE_OBJECT_NOT_FOUND' });
+  }
+
+  reply
+    .header('content-type', object.mimeType)
+    .header('x-object-sha256', object.sha256)
+    .header('cache-control', 'private, no-store');
+
+  return reply.send(Buffer.from(object.content));
+});
+
+const storageLinkSchema = z.object({
+  storageKey: z.string().min(1).max(1500),
+  expiresSeconds: z.number().int().min(60).max(7 * 24 * 60 * 60).default(24 * 60 * 60)
+});
+
+app.post('/v1/internal/storage/download-link', async (request, reply) => {
+  requireWorkerSecret(request);
+  const parsed = storageLinkSchema.safeParse(request.body);
+  if (!parsed.success) {
+    return reply.code(400).send({ error: 'INVALID_STORAGE_LINK_REQUEST' });
+  }
+
+  const exists = await prisma.storedObject.findUnique({
+    where: { storageKey: parsed.data.storageKey },
+    select: { storageKey: true }
+  });
+  if (!exists) {
+    return reply.code(404).send({ error: 'STORAGE_OBJECT_NOT_FOUND' });
+  }
+
+  const publicApiBase =
+    process.env.PUBLIC_API_BASE_URL ||
+    process.env.API_BASE_URL;
+
+  if (!publicApiBase) {
+    return reply.code(503).send({ error: 'PUBLIC_API_BASE_URL_NOT_CONFIGURED' });
+  }
+
+  const token = createStorageDownloadToken(
+    parsed.data.storageKey,
+    parsed.data.expiresSeconds
+  );
+
+  return {
+    url: `${publicApiBase.replace(/\/$/, '')}/v1/storage/download?token=${encodeURIComponent(token)}`
+  };
+});
+
+app.get('/v1/storage/download', async (request, reply) => {
+  const token = String((request.query as { token?: string }).token ?? '');
+  const payload = verifyStorageDownloadToken(token);
+  if (!payload) {
+    return reply.code(401).send({ error: 'INVALID_OR_EXPIRED_DOWNLOAD_TOKEN' });
+  }
+
+  const object = await prisma.storedObject.findUnique({
+    where: { storageKey: payload.storageKey }
+  });
+
+  if (!object) {
+    return reply.code(404).send({ error: 'STORAGE_OBJECT_NOT_FOUND' });
+  }
+
+  const fileName = payload.storageKey.split('/').pop() || 'DotacjaPRO-document';
+  reply
+    .header('content-type', object.mimeType)
+    .header(
+      'content-disposition',
+      `attachment; filename*=UTF-8''${encodeURIComponent(fileName)}`
+    )
+    .header('cache-control', 'private, no-store');
+
+  return reply.send(Buffer.from(object.content));
 });
 
 app.get('/health', async () => ({
