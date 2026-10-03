@@ -51,7 +51,7 @@ model FundingProfile {
   existingBusinessLegalForm    String?
   plannedLegalForm              String?
   plannedBusinessDescription    String?
-  plannedPkd                    String[]
+  plannedPkd                    String[] @default([])
   businessActiveLast12Months    Boolean?
   priorNonRepayableStartupAid   Boolean?
   wantsPfronPath                Boolean @default(false)
@@ -234,17 +234,21 @@ model ChangeEvent {
 }
 
 model Notification {
-  id          String   @id @default(cuid())
-  userId      String
-  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
-  category    String
-  priority    String
-  title       String
-  body        String
-  scheduledAt DateTime?
-  sentAt      DateTime?
+  id            String   @id @default(cuid())
+  userId        String
+  user          User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  category      String
+  priority      String
+  title         String
+  body          String
+  scheduledAt   DateTime?
+  sentAt        DateTime?
+  failedAt      DateTime?
+  failureReason String?
   changeEventId String?
+  dedupeKey     String?
   @@index([userId, scheduledAt, sentAt])
+  @@unique([userId, dedupeKey])
 }
 
 model AuditEvent {
