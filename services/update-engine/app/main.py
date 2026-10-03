@@ -4,7 +4,7 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from fastapi import FastAPI, Header, HTTPException
 from zoneinfo import ZoneInfo
 
-from .scanner import scan_all_sources, build_morning_digests, requalify_verified_changes
+from .scanner import scan_all_sources, build_morning_digests, requalify_verified_changes, advance_funding_call_statuses
 from .teryt import sync_teryt_from_urls
 
 app = FastAPI(title="DotacjaPRO Update Engine")
@@ -19,6 +19,15 @@ def require_secret(x_worker_secret: str | None):
 
 @app.on_event("startup")
 async def startup():
+    scheduler.add_job(
+        advance_funding_call_statuses,
+        "cron",
+        minute=5,
+        id="funding-call-status-clock",
+        replace_existing=True,
+        max_instances=1,
+        coalesce=True
+    )
     scheduler.add_job(
         sync_teryt_from_urls,
         "cron",
@@ -121,3 +130,9 @@ async def teryt_sync_now(x_worker_secret: str | None = Header(default=None)):
 async def requalify_now(x_worker_secret: str | None = Header(default=None)):
     require_secret(x_worker_secret)
     return await requalify_verified_changes()
+
+
+@app.post("/advance-calls-now")
+async def advance_calls_now(x_worker_secret: str | None = Header(default=None)):
+    require_secret(x_worker_secret)
+    return await advance_funding_call_statuses()
