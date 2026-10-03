@@ -76,6 +76,225 @@ async function requireAdminUserId(request: FastifyRequest) {
 }
 
 
+
+async function adminProxyToInternal(
+  request: FastifyRequest,
+  reply: any,
+  method: 'POST' | 'PUT',
+  url: string,
+  payload: unknown
+) {
+  await requireAdminUserId(request);
+
+  const secret = process.env.INTERNAL_WORKER_SECRET;
+  if (!secret) {
+    return reply.code(503).send({ error: 'INTERNAL_WORKER_SECRET_NOT_CONFIGURED' });
+  }
+
+  const response = await app.inject({
+    method,
+    url,
+    headers: {
+      'content-type': 'application/json',
+      'x-worker-secret': secret
+    },
+    payload
+  });
+
+  const contentType = response.headers['content-type'] ?? '';
+  const body = contentType.includes('application/json')
+    ? response.json()
+    : { raw: response.body };
+
+  return reply.code(response.statusCode).send(body);
+}
+
+app.get('/v1/admin/review-queue', async (request) => {
+  await requireAdminUserId(request);
+
+  const [
+    fundingCalls,
+    submissionInstructions,
+    criterionSets,
+    formTemplates
+  ] = await Promise.all([
+    prisma.fundingCall.findMany({
+      where: { verificationStatus: 'DRAFT' },
+      include: {
+        institution: {
+          select: {
+            name: true,
+            officialUrl: true
+          }
+        },
+        source: {
+          select: {
+            canonicalUrl: true,
+            contentHash: true,
+            checkedAt: true
+          }
+        }
+      },
+      orderBy: { lastSeenAt: 'desc' },
+      take: 100
+    }),
+    prisma.submissionInstructionVersion.findMany({
+      where: { status: 'DRAFT' },
+      include: {
+        fundingCall: {
+          select: {
+            id: true,
+            title: true,
+            officialUrl: true,
+            institution: {
+              select: { name: true }
+            }
+          }
+        }
+      },
+      orderBy: { analyzedAt: 'desc' },
+      take: 100
+    }),
+    prisma.localCriterionSet.findMany({
+      where: { status: 'DRAFT' },
+      include: {
+        institution: {
+          select: {
+            name: true,
+            officialUrl: true
+          }
+        },
+        fundingCall: {
+          select: {
+            id: true,
+            title: true,
+            officialUrl: true
+          }
+        },
+        sourceDocument: {
+          select: {
+            originalName: true,
+            sha256: true,
+            source: {
+              select: {
+                canonicalUrl: true
+              }
+            }
+          }
+        },
+        criteria: {
+          orderBy: { sortOrder: 'asc' }
+        }
+      },
+      orderBy: { updatedAt: 'desc' },
+      take: 100
+    }),
+    prisma.officialFormTemplate.findMany({
+      where: {
+        active: true,
+        officialOnly: true,
+        mappingStatus: {
+          in: ['DRAFT', 'ANALYSIS_FAILED', 'UNMAPPED']
+        }
+      },
+      include: {
+        institution: {
+          select: {
+            name: true,
+            officialUrl: true
+          }
+        },
+        fundingCall: {
+          select: {
+            id: true,
+            title: true,
+            officialUrl: true
+          }
+        },
+        sourceDocument: {
+          select: {
+            originalName: true,
+            mimeType: true,
+            sha256: true,
+            source: {
+              select: {
+                canonicalUrl: true
+              }
+            }
+          }
+        },
+        fieldMappings: {
+          orderBy: { sortOrder: 'asc' }
+        }
+      },
+      orderBy: { id: 'desc' },
+      take: 100
+    })
+  ]);
+
+  return {
+    fundingCalls,
+    submissionInstructions,
+    criterionSets,
+    formTemplates
+  };
+});
+
+app.post('/v1/admin/funding-calls/:id/verify', async (request, reply) => {
+  const id = (request.params as { id: string }).id;
+  return adminProxyToInternal(
+    request,
+    reply,
+    'POST',
+    `/v1/internal/funding-calls/${encodeURIComponent(id)}/verify`,
+    request.body
+  );
+});
+
+app.post('/v1/admin/submission-instructions/:id/verify', async (request, reply) => {
+  const id = (request.params as { id: string }).id;
+  return adminProxyToInternal(
+    request,
+    reply,
+    'POST',
+    `/v1/internal/submission-instructions/${encodeURIComponent(id)}/verify`,
+    request.body
+  );
+});
+
+app.post('/v1/admin/criterion-sets/:id/verify', async (request, reply) => {
+  const id = (request.params as { id: string }).id;
+  return adminProxyToInternal(
+    request,
+    reply,
+    'POST',
+    `/v1/internal/criterion-sets/${encodeURIComponent(id)}/verify`,
+    request.body
+  );
+});
+
+app.put('/v1/admin/templates/:id/mappings', async (request, reply) => {
+  const id = (request.params as { id: string }).id;
+  return adminProxyToInternal(
+    request,
+    reply,
+    'PUT',
+    `/v1/internal/templates/${encodeURIComponent(id)}/mappings`,
+    request.body
+  );
+});
+
+app.post('/v1/admin/change-events/:id/verify', async (request, reply) => {
+  const id = (request.params as { id: string }).id;
+  return adminProxyToInternal(
+    request,
+    reply,
+    'POST',
+    `/v1/internal/change-events/${encodeURIComponent(id)}/verify`,
+    request.body
+  );
+});
+
 const regionSearchSchema = z.object({
   voivodeship: z.enum(VOIVODESHIPS),
   q: z.string().trim().min(2).max(120)
