@@ -192,12 +192,6 @@ app.get('/v1/admin/review-queue', async (request) => {
         }
       },
       include: {
-        institution: {
-          select: {
-            name: true,
-            officialUrl: true
-          }
-        },
         fundingCall: {
           select: {
             id: true,
