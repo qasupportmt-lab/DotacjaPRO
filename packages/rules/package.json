@@ -1,1 +1,17 @@
-{"name":"@dotacjapro/rules","private":true,"type":"module","scripts":{"build":"tsc -p tsconfig.json","typecheck":"tsc -p tsconfig.json --noEmit","lint":"echo 'lint rules'"},"devDependencies":{"typescript":"^5.9.2"}}
+{
+  "name": "@dotacjapro/rules",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "lint": "echo 'lint rules'"
+  },
+  "devDependencies": {
+    "typescript": "^5.9.2"
+  },
+  "main": "src/index.ts",
+  "exports": {
+    ".": "./src/index.ts"
+  }
+}
