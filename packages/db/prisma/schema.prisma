@@ -230,6 +230,7 @@ model Case {
   documents          CaseDocument[]
   renderJobs          DocumentRenderJob[]
   qualifications      QualificationSnapshot[]
+  criterionAssessments CriterionAssessmentSnapshot[]
   @@index([userId, status])
 }
 
@@ -408,6 +409,7 @@ model LocalCriterionSet {
   createdAt        DateTime @default(now())
   updatedAt        DateTime @updatedAt
   criteria         LocalCriterion[]
+  assessments      CriterionAssessmentSnapshot[]
   @@index([institutionId, status, verifiedAt])
   @@index([fundingCallId, status])
 }
@@ -427,4 +429,19 @@ model LocalCriterion {
   sortOrder        Int      @default(0)
   @@unique([criterionSetId, code])
   @@index([criterionSetId, sortOrder])
+}
+
+
+model CriterionAssessmentSnapshot {
+  id             String   @id @default(cuid())
+  caseId         String
+  case           Case     @relation(fields: [caseId], references: [id], onDelete: Cascade)
+  criterionSetId String
+  criterionSet   LocalCriterionSet @relation(fields: [criterionSetId], references: [id], onDelete: Cascade)
+  status         String
+  answersJson    Json
+  resultJson     Json
+  createdAt      DateTime @default(now())
+  @@index([caseId, createdAt])
+  @@index([criterionSetId, createdAt])
 }
