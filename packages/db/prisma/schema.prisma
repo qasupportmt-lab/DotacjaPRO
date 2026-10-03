@@ -1,0 +1,166 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id              String   @id @default(cuid())
+  telegramUserId  String   @unique
+  email           String?  @unique
+  emailVerifiedAt DateTime?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+  profile         UserProfile?
+  cases           Case[]
+}
+
+model UserProfile {
+  id             String @id @default(cuid())
+  userId         String @unique
+  user           User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  voivodeship    String?
+  county         String?
+  municipality   String?
+  city           String?
+  postalCode     String?
+  pupOfficeId    String?
+  wupOfficeId    String?
+  lgdId          String?
+}
+
+model Institution {
+  id           String @id @default(cuid())
+  type         String
+  name         String
+  voivodeship  String?
+  county       String?
+  municipality String?
+  officialUrl  String
+  sources      Source[]
+  calls        FundingCall[]
+}
+
+model Source {
+  id            String   @id @default(cuid())
+  institutionId String?
+  institution   Institution? @relation(fields: [institutionId], references: [id])
+  kind          String
+  canonicalUrl  String   @unique
+  trustLevel    String
+  enabled       Boolean  @default(true)
+  checkedAt     DateTime?
+  documents     SourceDocument[]
+}
+
+model SourceDocument {
+  id            String   @id @default(cuid())
+  sourceId      String
+  source        Source   @relation(fields: [sourceId], references: [id], onDelete: Cascade)
+  originalName  String
+  mimeType      String
+  sha256        String
+  storageKey    String
+  publishedAt   DateTime?
+  validFrom     DateTime?
+  validTo       DateTime?
+  downloadedAt  DateTime @default(now())
+  formTemplates OfficialFormTemplate[]
+}
+
+model OfficialFormTemplate {
+  id               String   @id @default(cuid())
+  sourceDocumentId String
+  sourceDocument   SourceDocument @relation(fields: [sourceDocumentId], references: [id])
+  institutionId    String?
+  programCode      String?
+  formCode         String
+  versionLabel     String?
+  active           Boolean @default(true)
+  officialOnly     Boolean @default(true)
+  fieldMappings    FormFieldMapping[]
+}
+
+model FormFieldMapping {
+  id         String @id @default(cuid())
+  templateId String
+  template   OfficialFormTemplate @relation(fields: [templateId], references: [id], onDelete: Cascade)
+  fieldKey   String
+  sourcePath String
+  inputType  String
+  required   Boolean @default(false)
+}
+
+model FundingCall {
+  id             String   @id @default(cuid())
+  institutionId  String
+  institution    Institution @relation(fields: [institutionId], references: [id])
+  title          String
+  programCode    String?
+  status         String
+  opensAt        DateTime?
+  closesAt       DateTime?
+  untilExhausted Boolean  @default(false)
+  verifiedAt     DateTime?
+}
+
+model Case {
+  id                 String   @id @default(cuid())
+  userId             String
+  user               User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  status             String
+  caseType           String
+  fundingCallId      String?
+  legalSnapshotId    String?
+  formTemplateId     String?
+  submittedAt        DateTime?
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+  answers            CaseAnswer[]
+  documents          CaseDocument[]
+}
+
+model CaseAnswer {
+  id        String @id @default(cuid())
+  caseId    String
+  case      Case @relation(fields: [caseId], references: [id], onDelete: Cascade)
+  fieldKey  String
+  valueJson Json
+  version   Int @default(1)
+}
+
+model CaseDocument {
+  id             String   @id @default(cuid())
+  caseId         String
+  case           Case     @relation(fields: [caseId], references: [id], onDelete: Cascade)
+  type           String
+  storageKey     String
+  officialSource Boolean  @default(false)
+  templateHash   String?
+  createdAt      DateTime @default(now())
+}
+
+model ChangeEvent {
+  id            String   @id @default(cuid())
+  sourceId      String?
+  changeType    String
+  severity      String
+  detectedAt    DateTime @default(now())
+  effectiveFrom DateTime?
+  summary       String
+  verified      Boolean @default(false)
+}
+
+model Notification {
+  id          String   @id @default(cuid())
+  userId      String
+  category    String
+  priority    String
+  title       String
+  body        String
+  scheduledAt DateTime?
+  sentAt      DateTime?
+}
