@@ -1,17 +1,20 @@
-import { Bot, InlineKeyboard } from 'grammy';
+import http from 'node:http';
+import { Bot, InlineKeyboard, type Update } from 'grammy';
 
 const token = process.env.TELEGRAM_BOT_TOKEN;
 if (!token) throw new Error('TELEGRAM_BOT_TOKEN is required');
 
 const apiBaseUrl = process.env.API_BASE_URL ?? 'http://localhost:4000';
-const appBaseUrl = process.env.APP_BASE_URL ?? 'https://example.com';
+const appBaseUrl = process.env.APP_BASE_URL ?? 'http://localhost:3000';
 const workerSecret = process.env.INTERNAL_WORKER_SECRET ?? '';
+const cronSecret = process.env.CRON_SECRET ?? '';
+const webhookSecret = process.env.TELEGRAM_WEBHOOK_SECRET ?? '';
+const publicWebhookUrl = process.env.TELEGRAM_WEBHOOK_URL ?? '';
 
 const bot = new Bot(token);
 
 bot.command('start', async (ctx) => {
   const keyboard = new InlineKeyboard().webApp('Otwórz DotacjaPRO', appBaseUrl);
-
   await ctx.reply(
     'DotacjaPRO sprawdzi dostępne finansowanie i poprowadzi Twoją sprawę na aktualnych, oficjalnych formularzach urzędowych.',
     { reply_markup: keyboard }
@@ -20,14 +23,25 @@ bot.command('start', async (ctx) => {
 
 bot.command('dotacje', async (ctx) => {
   const keyboard = new InlineKeyboard().webApp('Sprawdź finansowanie', appBaseUrl);
-  await ctx.reply('Otwórz DotacjaPRO, aby sprawdzić programy dopasowane do Twojego regionu i sytuacji.', {
-    reply_markup: keyboard
-  });
+  await ctx.reply(
+    'Otwórz DotacjaPRO, aby sprawdzić programy dopasowane do Twojego regionu i sytuacji.',
+    { reply_markup: keyboard }
+  );
 });
+
+bot.catch((err) => console.error('Bot error', err));
+
+function escapeHtml(value: string) {
+  return value
+    .replaceAll('&', '&amp;')
+    .replaceAll('<', '&lt;')
+    .replaceAll('>', '&gt;');
+}
 
 async function reportDelivery(id: string, success: boolean, error?: string) {
   if (!workerSecret) return;
-  await fetch(`${apiBaseUrl}/v1/internal/notifications/${id}/delivery`, {
+
+  await fetch(apiBaseUrl + '/v1/internal/notifications/' + id + '/delivery', {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
@@ -37,13 +51,18 @@ async function reportDelivery(id: string, success: boolean, error?: string) {
   });
 }
 
-async function deliverPendingNotifications() {
-  if (!workerSecret) return;
+async function deliverPendingNotifications(limit = 100) {
+  if (!workerSecret) throw new Error('INTERNAL_WORKER_SECRET is required');
 
-  const response = await fetch(`${apiBaseUrl}/v1/internal/notifications/pending?limit=100`, {
-    headers: { 'x-worker-secret': workerSecret }
-  });
-  if (!response.ok) throw new Error(`Notification queue HTTP ${response.status}`);
+  const safeLimit = Math.max(1, Math.min(limit, 200));
+  const response = await fetch(
+    apiBaseUrl + '/v1/internal/notifications/pending?limit=' + safeLimit,
+    { headers: { 'x-worker-secret': workerSecret } }
+  );
+
+  if (!response.ok) {
+    throw new Error('Notification queue HTTP ' + response.status);
+  }
 
   const data = await response.json() as {
     notifications: Array<{
@@ -54,34 +73,167 @@ async function deliverPendingNotifications() {
     }>;
   };
 
+  let sent = 0;
+  let failed = 0;
+
   for (const item of data.notifications) {
     try {
       const keyboard = new InlineKeyboard().webApp('Otwórz DotacjaPRO', appBaseUrl);
       await bot.api.sendMessage(
         Number(item.telegramUserId),
-        `<b>${item.title}</b>\n\n${item.body}`,
+        '<b>' + escapeHtml(item.title) + '</b>\n\n' + escapeHtml(item.body),
         { parse_mode: 'HTML', reply_markup: keyboard }
       );
       await reportDelivery(item.id, true);
+      sent++;
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       await reportDelivery(item.id, false, message.slice(0, 1900));
+      failed++;
     }
   }
+
+  return { queued: data.notifications.length, sent, failed };
 }
 
-let delivering = false;
-setInterval(async () => {
-  if (delivering) return;
-  delivering = true;
-  try {
-    await deliverPendingNotifications();
-  } catch (error) {
-    console.error('Notification worker error', error);
-  } finally {
-    delivering = false;
-  }
-}, 30_000);
+function json(
+  response: http.ServerResponse,
+  statusCode: number,
+  payload: unknown
+) {
+  response.writeHead(statusCode, {
+    'content-type': 'application/json; charset=utf-8'
+  });
+  response.end(JSON.stringify(payload));
+}
 
-bot.catch((err) => console.error('Bot error', err));
-void bot.start();
+async function readJsonBody(request: http.IncomingMessage): Promise<unknown> {
+  const chunks: Buffer[] = [];
+  let bytes = 0;
+
+  for await (const chunk of request) {
+    const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+    bytes += buffer.length;
+
+    if (bytes > 1_000_000) {
+      throw new Error('REQUEST_BODY_TOO_LARGE');
+    }
+
+    chunks.push(buffer);
+  }
+
+  if (chunks.length === 0) return {};
+  return JSON.parse(Buffer.concat(chunks).toString('utf8'));
+}
+
+function workerAuthorized(request: http.IncomingMessage) {
+  return Boolean(
+    workerSecret &&
+    request.headers['x-worker-secret'] === workerSecret
+  );
+}
+
+function cronAuthorized(request: http.IncomingMessage) {
+  return Boolean(
+    cronSecret &&
+    request.headers.authorization === 'Bearer ' + cronSecret
+  );
+}
+
+function webhookAuthorized(request: http.IncomingMessage) {
+  return Boolean(
+    webhookSecret &&
+    request.headers['x-telegram-bot-api-secret-token'] === webhookSecret
+  );
+}
+
+async function configureWebhook() {
+  if (!publicWebhookUrl || !webhookSecret) {
+    throw new Error(
+      'TELEGRAM_WEBHOOK_URL and TELEGRAM_WEBHOOK_SECRET are required'
+    );
+  }
+
+  return bot.api.setWebhook(publicWebhookUrl, {
+    secret_token: webhookSecret,
+    allowed_updates: ['message', 'callback_query', 'my_chat_member']
+  });
+}
+
+const server = http.createServer(async (request, response) => {
+  try {
+    const host = request.headers.host ?? 'localhost';
+    const url = new URL(request.url ?? '/', 'http://' + host);
+
+    if (request.method === 'GET' && url.pathname === '/health') {
+      return json(response, 200, {
+        service: 'telegram-bot',
+        status: 'ok',
+        mode: 'webhook',
+        webhookConfigured: Boolean(publicWebhookUrl && webhookSecret)
+      });
+    }
+
+    if (request.method === 'POST' && url.pathname === '/webhook') {
+      if (!webhookAuthorized(request)) {
+        return json(response, 401, {
+          error: 'UNAUTHORIZED_TELEGRAM_WEBHOOK'
+        });
+      }
+
+      const update = await readJsonBody(request) as Update;
+      await bot.handleUpdate(update);
+      return json(response, 200, { ok: true });
+    }
+
+    if (request.method === 'POST' && url.pathname === '/internal/deliver') {
+      if (!workerAuthorized(request)) {
+        return json(response, 401, { error: 'UNAUTHORIZED_WORKER' });
+      }
+
+      const limit = Number(url.searchParams.get('limit') ?? 100);
+      return json(
+        response,
+        200,
+        await deliverPendingNotifications(limit)
+      );
+    }
+
+    if (request.method === 'GET' && url.pathname === '/cron/deliver') {
+      if (!cronAuthorized(request)) {
+        return json(response, 401, { error: 'UNAUTHORIZED_CRON' });
+      }
+
+      return json(
+        response,
+        200,
+        await deliverPendingNotifications(100)
+      );
+    }
+
+    if (
+      request.method === 'POST' &&
+      url.pathname === '/internal/configure-webhook'
+    ) {
+      if (!workerAuthorized(request)) {
+        return json(response, 401, { error: 'UNAUTHORIZED_WORKER' });
+      }
+
+      const result = await configureWebhook();
+      return json(response, 200, {
+        ok: Boolean(result),
+        webhookUrl: publicWebhookUrl
+      });
+    }
+
+    return json(response, 404, { error: 'NOT_FOUND' });
+  } catch (error) {
+    console.error('Bot HTTP server error', error);
+    return json(response, 500, {
+      error: error instanceof Error ? error.message : 'INTERNAL_ERROR'
+    });
+  }
+});
+
+const port = Number(process.env.PORT ?? 4100);
+server.listen(port, '0.0.0.0');
