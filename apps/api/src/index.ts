@@ -481,6 +481,128 @@ app.post('/v1/internal/source-scan', async (request, reply) => {
 });
 
 
+
+const pupDirectoryImportSchema = z.object({
+  sourceUrl: z.string().url(),
+  voivodeship: z.enum(VOIVODESHIPS),
+  offices: z.array(z.object({
+    name: z.string().min(3).max(300),
+    officialUrl: z.string().url(),
+    municipalities: z.array(z.string().min(1).max(160)).min(1)
+  })).min(1).max(200)
+});
+
+app.post('/v1/internal/pup-directory/import', async (request, reply) => {
+  requireWorkerSecret(request);
+  const parsed = pupDirectoryImportSchema.safeParse(request.body);
+  if (!parsed.success) {
+    return reply.code(400).send({ error: 'INVALID_PUP_DIRECTORY', details: parsed.error.flatten() });
+  }
+
+  const { sourceUrl, voivodeship, offices } = parsed.data;
+  const now = new Date();
+  let institutionsUpserted = 0;
+  let assignmentsUpserted = 0;
+
+  for (const office of offices) {
+    const url = new URL(office.officialUrl);
+    const code = `PUP:${url.hostname.toLowerCase()}`;
+
+    const institution = await prisma.institution.upsert({
+      where: { code },
+      update: {
+        type: 'PUP',
+        name: office.name,
+        voivodeship,
+        officialUrl: office.officialUrl
+      },
+      create: {
+        code,
+        type: 'PUP',
+        name: office.name,
+        voivodeship,
+        officialUrl: office.officialUrl
+      }
+    });
+    institutionsUpserted++;
+
+    await prisma.source.upsert({
+      where: { canonicalUrl: office.officialUrl },
+      update: {
+        institutionId: institution.id,
+        kind: 'PUP_HOME',
+        trustLevel: 'OFFICIAL_PRIMARY',
+        enabled: true,
+        scopeVoivodeship: voivodeship
+      },
+      create: {
+        institutionId: institution.id,
+        kind: 'PUP_HOME',
+        canonicalUrl: office.officialUrl,
+        trustLevel: 'OFFICIAL_PRIMARY',
+        enabled: true,
+        scopeVoivodeship: voivodeship
+      }
+    });
+
+    const uniqueMunicipalities = [...new Set(
+      office.municipalities
+        .map((name) => name.trim().replace(/[.;]+$/, ''))
+        .filter(Boolean)
+    )];
+
+    for (const municipality of uniqueMunicipalities) {
+      await prisma.regionAssignment.upsert({
+        where: {
+          institutionId_role_voivodeship_municipality: {
+            institutionId: institution.id,
+            role: 'PUP',
+            voivodeship,
+            municipality
+          }
+        },
+        update: {
+          city: municipality,
+          sourceUrl,
+          verifiedAt: now,
+          validTo: null
+        },
+        create: {
+          institutionId: institution.id,
+          role: 'PUP',
+          voivodeship,
+          municipality,
+          city: municipality,
+          sourceUrl,
+          verifiedAt: now
+        }
+      });
+      assignmentsUpserted++;
+    }
+  }
+
+  await prisma.auditEvent.create({
+    data: {
+      actorType: 'SYSTEM',
+      action: 'PUP_DIRECTORY_IMPORTED',
+      entity: 'RegionAssignment',
+      metadata: {
+        sourceUrl,
+        voivodeship,
+        offices: institutionsUpserted,
+        assignments: assignmentsUpserted
+      }
+    }
+  });
+
+  return {
+    voivodeship,
+    institutionsUpserted,
+    assignmentsUpserted
+  };
+});
+
+
 function eventAppliesToRegion(
   payload: unknown,
   profile: { voivodeship: string | null; county: string | null; municipality: string | null }
