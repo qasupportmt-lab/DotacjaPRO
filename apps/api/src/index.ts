@@ -267,6 +267,34 @@ app.get('/v1/me/dashboard', async (request) => {
 });
 
 
+
+const notificationPreferenceSchema = z.object({
+  morningDigest: z.boolean().optional(),
+  criticalAlerts: z.boolean().optional(),
+  newCalls: z.boolean().optional(),
+  legalChanges: z.boolean().optional(),
+  caseChanges: z.boolean().optional(),
+  marketing: z.boolean().optional(),
+  telegramWriteAccess: z.boolean().optional()
+});
+
+app.put('/v1/me/notifications', async (request, reply) => {
+  const userId = await requireUserId(request);
+  const parsed = notificationPreferenceSchema.safeParse(request.body);
+  if (!parsed.success) {
+    return reply.code(400).send({ error: 'INVALID_NOTIFICATION_PREFERENCES' });
+  }
+
+  const preferences = await prisma.notificationPreference.upsert({
+    where: { userId },
+    update: parsed.data,
+    create: { userId, ...parsed.data }
+  });
+
+  return { preferences };
+});
+
+
 function requireWorkerSecret(request: FastifyRequest) {
   const configured = process.env.INTERNAL_WORKER_SECRET;
   const received = request.headers['x-worker-secret'];
@@ -367,6 +395,184 @@ app.post('/v1/internal/source-scan', async (request, reply) => {
     changeEventId
   };
 });
+
+
+function eventAppliesToRegion(
+  payload: unknown,
+  profile: { voivodeship: string | null; county: string | null; municipality: string | null }
+) {
+  if (!payload || typeof payload !== 'object' || Array.isArray(payload)) return true;
+  const p = payload as Record<string, unknown>;
+  const v = typeof p.scopeVoivodeship === 'string' ? p.scopeVoivodeship : null;
+  const c = typeof p.scopeCounty === 'string' ? p.scopeCounty : null;
+  const m = typeof p.scopeMunicipality === 'string' ? p.scopeMunicipality : null;
+
+  if (v && v !== profile.voivodeship) return false;
+  if (c && c !== profile.county) return false;
+  if (m && m !== profile.municipality) return false;
+  return true;
+}
+
+function daysUntil(date: Date, now: Date) {
+  return Math.ceil((date.getTime() - now.getTime()) / 86_400_000);
+}
+
+app.post('/v1/internal/build-digests', async (request) => {
+  requireWorkerSecret(request);
+  const now = new Date();
+  const since = new Date(now.getTime() - 24 * 60 * 60 * 1000);
+  const horizon = new Date(now.getTime() + 7 * 24 * 60 * 60 * 1000);
+
+  const [changes, calls, users] = await Promise.all([
+    prisma.changeEvent.findMany({
+      where: { verified: true, detectedAt: { gte: since } },
+      orderBy: { detectedAt: 'desc' },
+      take: 200
+    }),
+    prisma.fundingCall.findMany({
+      where: {
+        verifiedAt: { not: null },
+        OR: [
+          { opensAt: { gte: now, lte: horizon } },
+          { closesAt: { gte: now, lte: horizon } }
+        ]
+      },
+      include: { institution: true },
+      orderBy: [{ opensAt: 'asc' }, { closesAt: 'asc' }],
+      take: 200
+    }),
+    prisma.user.findMany({
+      where: {
+        notificationPreference: {
+          is: { morningDigest: true, telegramWriteAccess: true }
+        }
+      },
+      include: { profile: true, notificationPreference: true }
+    })
+  ]);
+
+  const formatter = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Europe/Warsaw',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit'
+  });
+  const digestDate = formatter.format(now);
+  let created = 0;
+
+  for (const user of users) {
+    if (!user.profile) continue;
+    const profile = user.profile;
+    const lines: string[] = [];
+
+    for (const event of changes) {
+      if (!eventAppliesToRegion(event.payload, profile)) continue;
+      lines.push(event.summary);
+      if (lines.length >= 3) break;
+    }
+
+    for (const call of calls) {
+      if (lines.length >= 3) break;
+      const institution = call.institution;
+      if (institution.voivodeship && institution.voivodeship !== profile.voivodeship) continue;
+      if (institution.county && institution.county !== profile.county) continue;
+      if (institution.municipality && institution.municipality !== profile.municipality) continue;
+
+      if (call.opensAt && call.opensAt >= now && call.opensAt <= horizon) {
+        const d = daysUntil(call.opensAt, now);
+        lines.push(d <= 1 ? `Jutro rusza nabór: ${call.title}` : `Za ${d} dni rusza nabór: ${call.title}`);
+      } else if (call.closesAt && call.closesAt >= now && call.closesAt <= horizon) {
+        const d = daysUntil(call.closesAt, now);
+        lines.push(d <= 1 ? `Ostatni dzień na wniosek: ${call.title}` : `${d} dni do zamknięcia: ${call.title}`);
+      }
+    }
+
+    if (lines.length === 0) continue;
+
+    const dedupeKey = `morning-digest:${digestDate}`;
+    await prisma.notification.upsert({
+      where: { userId_dedupeKey: { userId: user.id, dedupeKey } },
+      update: {
+        title: 'DotacjaPRO — poranny skrót',
+        body: lines.map((line) => `• ${line}`).join('\n'),
+        scheduledAt: now,
+        failedAt: null,
+        failureReason: null
+      },
+      create: {
+        userId: user.id,
+        category: 'MORNING_DIGEST',
+        priority: 'P5',
+        title: 'DotacjaPRO — poranny skrót',
+        body: lines.map((line) => `• ${line}`).join('\n'),
+        scheduledAt: now,
+        dedupeKey
+      }
+    });
+    created++;
+  }
+
+  return { created, usersChecked: users.length };
+});
+
+app.get('/v1/internal/notifications/pending', async (request) => {
+  requireWorkerSecret(request);
+  const rawLimit = Number((request.query as { limit?: string }).limit ?? 100);
+  const limit = Math.max(1, Math.min(200, Number.isFinite(rawLimit) ? rawLimit : 100));
+  const now = new Date();
+
+  const notifications = await prisma.notification.findMany({
+    where: {
+      sentAt: null,
+      failedAt: null,
+      OR: [{ scheduledAt: null }, { scheduledAt: { lte: now } }],
+      user: {
+        notificationPreference: { is: { telegramWriteAccess: true } }
+      }
+    },
+    include: {
+      user: { select: { telegramUserId: true } }
+    },
+    orderBy: [{ priority: 'asc' }, { scheduledAt: 'asc' }],
+    take: limit
+  });
+
+  return {
+    notifications: notifications.map((item) => ({
+      id: item.id,
+      telegramUserId: item.user.telegramUserId,
+      title: item.title,
+      body: item.body,
+      category: item.category,
+      priority: item.priority
+    }))
+  };
+});
+
+const deliverySchema = z.object({
+  success: z.boolean(),
+  error: z.string().max(2000).optional()
+});
+
+app.post('/v1/internal/notifications/:id/delivery', async (request, reply) => {
+  requireWorkerSecret(request);
+  const parsed = deliverySchema.safeParse(request.body);
+  if (!parsed.success) return reply.code(400).send({ error: 'INVALID_DELIVERY_REPORT' });
+
+  const id = (request.params as { id: string }).id;
+  const exists = await prisma.notification.findUnique({ where: { id } });
+  if (!exists) return reply.code(404).send({ error: 'NOTIFICATION_NOT_FOUND' });
+
+  const notification = await prisma.notification.update({
+    where: { id },
+    data: parsed.data.success
+      ? { sentAt: new Date(), failedAt: null, failureReason: null }
+      : { failedAt: new Date(), failureReason: parsed.data.error ?? 'Unknown Telegram delivery error' }
+  });
+
+  return { notificationId: notification.id, success: parsed.data.success };
+});
+
 
 app.setErrorHandler((error, request, reply) => {
   const statusCode = (error as Error & { statusCode?: number }).statusCode ?? 500;
