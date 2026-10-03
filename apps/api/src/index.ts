@@ -1696,19 +1696,50 @@ app.get('/v1/cases/:caseId/official-forms', async (request, reply) => {
     ]
   });
 
+  const renderJobs = templates.length > 0
+    ? await prisma.documentRenderJob.findMany({
+        where: {
+          caseId,
+          templateId: { in: templates.map((template) => template.id) }
+        },
+        orderBy: { requestedAt: 'desc' },
+        select: {
+          id: true,
+          templateId: true,
+          status: true,
+          outputName: true,
+          errorCode: true,
+          requestedAt: true,
+          completedAt: true
+        }
+      })
+    : [];
+
+  const latestByTemplate = new Map<string, typeof renderJobs[number]>();
+  for (const job of renderJobs) {
+    if (!latestByTemplate.has(job.templateId)) {
+      latestByTemplate.set(job.templateId, job);
+    }
+  }
+
   return {
     fundingCall: item.fundingCall,
-    forms: templates.map((template) => ({
-      id: template.id,
-      formCode: template.formCode,
-      versionLabel: template.versionLabel,
-      mappingVersion: template.mappingVersion,
-      originalName: template.sourceDocument.originalName,
-      mimeType: template.sourceDocument.mimeType,
-      sha256: template.sourceDocument.sha256,
-      officialSourceUrl: template.sourceDocument.source.canonicalUrl,
-      officialSourceName: template.sourceDocument.source.displayName
-    }))
+    forms: templates.map((template) => {
+      const latestRender = latestByTemplate.get(template.id) ?? null;
+      return {
+        id: template.id,
+        formCode: template.formCode,
+        versionLabel: template.versionLabel,
+        mappingVersion: template.mappingVersion,
+        requiredForPackage: template.requiredForPackage,
+        originalName: template.sourceDocument.originalName,
+        mimeType: template.sourceDocument.mimeType,
+        sha256: template.sourceDocument.sha256,
+        officialSourceUrl: template.sourceDocument.source.canonicalUrl,
+        officialSourceName: template.sourceDocument.source.displayName,
+        latestRender
+      };
+    })
   };
 });
 
