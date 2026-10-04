@@ -32,7 +32,10 @@ const app = Fastify({ logger: true, bodyLimit: 35 * 1024 * 1024 });
 
 await app.register(cors, {
   origin: true,
-  credentials: true
+  credentials: true,
+  methods: ['GET', 'HEAD', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
+  allowedHeaders: ['Authorization', 'Content-Type'],
+  maxAge: 86400
 });
 
 app.addContentTypeParser(
