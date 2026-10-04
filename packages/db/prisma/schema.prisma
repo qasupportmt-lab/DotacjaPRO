@@ -28,6 +28,8 @@ model User {
   emailVerifications    EmailVerification[]
   accountingSales       SaleTransaction[]
   accountingExpenses    AccountingExpense[] @relation("AccountingExpenseCreator")
+  commerceOrders        CommerceOrder[]
+  entitlements          Entitlement[]
 }
 
 model UserProfile {
@@ -535,6 +537,106 @@ model DocumentPackageJob {
 }
 
 
+
+
+model CommerceProduct {
+  id               String   @id @default(cuid())
+  code             String   @unique
+  name             String
+  description      String?
+  kind             String
+  active           Boolean  @default(false)
+  priceGrossGrosz  Int?
+  currency         String   @default("PLN")
+  deliveryType     String   @default("DIGITAL")
+  metadata         Json?
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+  orders           CommerceOrder[]
+  entitlements     Entitlement[]
+
+  @@index([active, code])
+}
+
+model CommerceOrder {
+  id                String   @id @default(cuid())
+  userId            String
+  user              User     @relation(fields: [userId], references: [id], onDelete: Restrict)
+  productId         String
+  product           CommerceProduct @relation(fields: [productId], references: [id], onDelete: Restrict)
+  status            String   @default("PENDING_PAYMENT")
+  currency          String   @default("PLN")
+  amountGrossGrosz  Int
+  legalVersion      String
+  legalAcceptanceId String
+  provider          String?
+  providerCheckoutId String?
+  paidAt            DateTime?
+  cancelledAt       DateTime?
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+  payments          PaymentRecord[]
+  entitlements      Entitlement[]
+
+  @@index([userId, createdAt])
+  @@index([status, createdAt])
+  @@unique([provider, providerCheckoutId])
+}
+
+model PaymentRecord {
+  id                    String   @id @default(cuid())
+  orderId               String
+  order                 CommerceOrder @relation(fields: [orderId], references: [id], onDelete: Restrict)
+  provider              String
+  providerPaymentId     String
+  status                String
+  currency              String   @default("PLN")
+  amountReceivedGrosz   Int      @default(0)
+  refundedGrosz         Int      @default(0)
+  isTest                Boolean  @default(false)
+  receivedAt            DateTime?
+  refundedAt            DateTime?
+  metadata              Json?
+  createdAt             DateTime @default(now())
+  updatedAt             DateTime @updatedAt
+
+  @@unique([provider, providerPaymentId])
+  @@index([orderId, status])
+  @@index([receivedAt])
+}
+
+model PaymentEvent {
+  id              String   @id @default(cuid())
+  provider        String
+  providerEventId String
+  eventType       String
+  payloadSha256   String
+  status          String   @default("RECEIVED")
+  processedAt     DateTime?
+  errorCode       String?
+  createdAt       DateTime @default(now())
+
+  @@unique([provider, providerEventId])
+  @@index([status, createdAt])
+}
+
+model Entitlement {
+  id         String   @id @default(cuid())
+  userId     String
+  user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  productId  String
+  product    CommerceProduct @relation(fields: [productId], references: [id], onDelete: Restrict)
+  orderId    String?
+  order      CommerceOrder? @relation(fields: [orderId], references: [id], onDelete: SetNull)
+  status     String   @default("ACTIVE")
+  grantedAt  DateTime @default(now())
+  revokedAt  DateTime?
+  metadata   Json?
+
+  @@unique([userId, productId, orderId])
+  @@index([userId, status])
+  @@index([productId, status])
+}
 
 model SaleTransaction {
   id                    String   @id @default(cuid())
