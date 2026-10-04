@@ -25,6 +25,8 @@ import {
   LEGAL_VERSION
 } from './legal/policy.js';
 import { getLegalOperatorState } from './legal/operator.js';
+import { registerAccountingRoutes } from './accounting/routes.js';
+import { registerCommerceRoutes } from './commerce/routes.js';
 
 const app = Fastify({ logger: true, bodyLimit: 35 * 1024 * 1024 });
 
@@ -5094,6 +5096,17 @@ app.post('/v1/internal/notifications/:id/delivery', async (request, reply) => {
   return { notificationId: notification.id, success: parsed.data.success };
 });
 
+
+await registerAccountingRoutes(app, {
+  requireWorkerSecret,
+  requireAdminUserId
+});
+
+await registerCommerceRoutes(app, {
+  requireWorkerSecret,
+  requireUserId,
+  requireAdminUserId
+});
 
 app.setErrorHandler((error, request, reply) => {
   const statusCode = (error as Error & { statusCode?: number }).statusCode ?? 500;
