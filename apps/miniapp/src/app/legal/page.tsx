@@ -59,7 +59,7 @@ export default async function LegalPage() {
     legal = null;
   }
 
-  const brand = legal?.seller?.brand ?? 'DoradcaPRO';
+  const brand = 'DoradcaPRO';
   const contact = legal?.seller?.email ?? 'qasupportmt@gmail.com';
   const blockedReason = blockedReasonLabel(legal?.checkoutBlockedReason);
 
