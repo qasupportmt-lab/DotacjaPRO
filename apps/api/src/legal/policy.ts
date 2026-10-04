@@ -4,7 +4,7 @@ export const LEGAL_VERSION = '2026-10-04.1';
 
 export const LEGAL_STATEMENTS = {
   terms:
-    'Zapoznałem(-am) się z Regulaminem DotacjaPRO i akceptuję jego postanowienia.',
+    'Zapoznałem(-am) się z Regulaminem DoradcaPRO i akceptuję jego postanowienia.',
   license:
     'Zapoznałem(-am) się z warunkami licencji. Zakup nie przenosi autorskich praw majątkowych, a materiały nie mogą być odsprzedawane ani rozpowszechniane poza dozwolonym zakresem.',
   privacy:
