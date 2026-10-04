@@ -10,6 +10,11 @@ const workerSecret = process.env.INTERNAL_WORKER_SECRET ?? '';
 const cronSecret = process.env.CRON_SECRET ?? '';
 const webhookSecret = process.env.TELEGRAM_WEBHOOK_SECRET ?? '';
 const publicWebhookUrl = process.env.TELEGRAM_WEBHOOK_URL ?? '';
+const adminTelegramIds = new Set((process.env.ADMIN_TELEGRAM_USER_IDS ?? '').split(',').map(v => v.trim()).filter(Boolean));
+
+function isAdminTelegram(userId: number | undefined) {
+  return userId !== undefined && adminTelegramIds.has(String(userId));
+}
 
 const bot = new Bot(token);
 
@@ -118,6 +123,66 @@ bot.command('ksiegowa', async (ctx) => {
   }
 });
 
+bot.command('supervisor', async (ctx) => {
+  if (!isAdminTelegram(ctx.from?.id)) return ctx.reply('Ta funkcja jest dostępna tylko dla administratora DotacjaPRO.');
+  if (!workerSecret) return ctx.reply('Supervisor nie jest skonfigurowany.');
+  try {
+    const response = await fetch(apiBaseUrl.replace(/\/$/, '') + '/v1/internal/supervisor/summary', {
+      headers: { 'x-worker-secret': workerSecret },
+      signal: AbortSignal.timeout(10_000)
+    });
+    if (!response.ok) throw new Error('Supervisor HTTP ' + response.status);
+    const data = await response.json() as any;
+    const top = data.commerce.ranking?.[0];
+    const alerts = data.alerts?.length ? data.alerts.map((x: string) => '• ' + x).join('\n') : 'Brak aktywnych alertów.';
+    await ctx.reply([
+      '<b>DotacjaPRO — SUPERVISOR</b>',
+      '',
+      '<b>Użytkownicy</b>',
+      `Łącznie: ${data.users.total} | nowe 24h: ${data.users.new24h}`,
+      `Sprawy: ${data.cases.total} | nowe 7d: ${data.cases.new7d}`,
+      '',
+      '<b>Sprzedaż — 7 dni</b>',
+      `Zamówienia: ${data.commerce.orders7d}`,
+      `Przychód netto: ${(data.commerce.netRevenueGrosz / 100).toFixed(2)} zł`,
+      `Najczęściej kupowane: ${top ? top.name + ' (' + top.purchases + ')' : 'brak sprzedaży'}`,
+      `Produkty bez sprzedaży: ${data.commerce.noSales?.length ?? 0}`,
+      '',
+      '<b>Operacje</b>',
+      `Oczekujące powiadomienia: ${data.operations.pendingNotifications}`,
+      `Błędy powiadomień: ${data.operations.failedNotifications}`,
+      `Błędy dokumentów/paczek 7d: ${data.operations.renderFailures7d}/${data.operations.packageFailures7d}`,
+      '',
+      '<b>Alerty</b>',
+      alerts
+    ].join('\n'), { parse_mode: 'HTML' });
+  } catch (error) {
+    console.error('Supervisor command failed', error);
+    await ctx.reply('Supervisor chwilowo nie może pobrać danych.');
+  }
+});
+
+bot.command('status', async (ctx) => {
+  if (!isAdminTelegram(ctx.from?.id)) return ctx.reply('Ta funkcja jest dostępna tylko dla administratora DotacjaPRO.');
+  try {
+    const [api, webhook] = await Promise.all([
+      fetch(apiBaseUrl.replace(/\/$/, '') + '/ready', { signal: AbortSignal.timeout(10_000) }),
+      bot.api.getWebhookInfo()
+    ]);
+    await ctx.reply([
+      '<b>DotacjaPRO — STATUS</b>',
+      `Bot: OK`,
+      `API: ${api.ok ? 'OK' : 'BŁĄD ' + api.status}`,
+      `Webhook: ${webhook.url ? 'OK' : 'BRAK'}`,
+      `Oczekujące aktualizacje: ${webhook.pending_update_count}`,
+      `Ostatni błąd webhooka: ${webhook.last_error_message ?? 'brak'}`
+    ].join('\n'), { parse_mode: 'HTML' });
+  } catch (error) {
+    console.error('Status command failed', error);
+    await ctx.reply('Nie udało się wykonać pełnego testu statusu.');
+  }
+});
+
 bot.command('help', async (ctx) => {
   const keyboard = new InlineKeyboard().webApp('Otwórz DotacjaPRO', appBaseUrl);
   await ctx.reply(
@@ -127,6 +192,7 @@ bot.command('help', async (ctx) => {
       '/dotacje — sprawdź dostępne finansowanie',
       '/whoami — pokaż Twój Telegram ID',
       '/ksiegowa — sprzedaż, limit i podgląd PIT-36',
+      ...(isAdminTelegram(ctx.from?.id) ? ['/supervisor — prywatny panel nadzorczy', '/status — stan bota, API i webhooka'] : []),
       '/help — lista poleceń'
     ].join('\n'),
     { parse_mode: 'HTML', reply_markup: keyboard }
