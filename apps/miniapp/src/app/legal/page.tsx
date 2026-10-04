@@ -4,6 +4,14 @@ type LegalPayload = {
   version: string;
   sha256: string;
   statements: Record<string, string>;
+  operatorType: string;
+  representativeRequired: boolean;
+  representative: {
+    name: string | null;
+    email: string | null;
+  };
+  taxClassificationConfirmed: boolean;
+  nipRequired: boolean;
   seller: {
     brand: string;
     name: string | null;
@@ -17,6 +25,25 @@ type LegalPayload = {
 };
 
 export const dynamic = 'force-dynamic';
+
+function operatorLabel(operatorType?: string) {
+  if (operatorType === 'UNREGISTERED_ACTIVITY') {
+    return 'Osoba fizyczna — działalność nierejestrowana';
+  }
+  return operatorType ?? 'Model operatora nie został skonfigurowany';
+}
+
+function blockedReasonLabel(reason: string | null | undefined) {
+  const labels: Record<string, string> = {
+    LEGAL_SELLER_IDENTITY_INCOMPLETE:
+      'Brakuje kompletnych danych sprzedawcy / administratora.',
+    LEGAL_REPRESENTATIVE_REQUIRED:
+      'Wymagane są dane przedstawiciela ustawowego.',
+    LEGAL_TAX_CLASSIFICATION_UNCONFIRMED:
+      'Klasyfikacja podatkowa i VAT dla odpłatnych produktów nie została jeszcze potwierdzona.'
+  };
+  return reason ? (labels[reason] ?? reason) : null;
+}
 
 export default async function LegalPage() {
   let legal: LegalPayload | null = null;
@@ -34,15 +61,14 @@ export default async function LegalPage() {
 
   const brand = legal?.seller?.brand ?? 'DotacjaPRO Bot';
   const contact = legal?.seller?.email ?? 'qasupportmt@gmail.com';
+  const blockedReason = blockedReasonLabel(legal?.checkoutBlockedReason);
 
   return (
     <main className="shell">
       <section className="brand">
         <div className="eyebrow">DOTACJAPRO BOT</div>
         <h1>Regulamin, licencja i RODO</h1>
-        <p>
-          Aktualne informacje prawne dotyczące korzystania z DotacjaPRO.
-        </p>
+        <p>Aktualne informacje prawne dotyczące korzystania z DotacjaPRO.</p>
       </section>
 
       <section className="card legal-page">
@@ -50,12 +76,40 @@ export default async function LegalPage() {
         <p><strong>{brand}</strong></p>
         <p>Kontakt: <a className="source-link" href={`mailto:${contact}`}>{contact}</a></p>
 
-        {!legal?.legalIdentityComplete && (
+        <h2>Sprzedawca / administrator</h2>
+        <p><strong>{operatorLabel(legal?.operatorType)}</strong></p>
+        {legal?.seller?.name && <p>{legal.seller.name}</p>}
+        {legal?.seller?.address && <p>{legal.seller.address}</p>}
+        {legal?.seller?.nip && <p>NIP: {legal.seller.nip}</p>}
+        {legal?.operatorType === 'UNREGISTERED_ACTIVITY' && !legal?.seller?.nip && (
+          <p>
+            Sam status działalności nierejestrowanej nie powoduje automatycznie
+            obowiązku posiadania NIP. NIP może być wymagany w szczególnych
+            sytuacjach podatkowych, w tym związanych z VAT, kasą rejestrującą
+            lub KSeF.
+          </p>
+        )}
+
+        {legal?.representativeRequired && (
+          <>
+            <h2>Przedstawiciel ustawowy</h2>
+            {legal.representative?.name ? (
+              <>
+                <p><strong>{legal.representative.name}</strong></p>
+                {legal.representative.email && <p>{legal.representative.email}</p>}
+              </>
+            ) : (
+              <p>Dane przedstawiciela ustawowego wymagają uzupełnienia przed sprzedażą.</p>
+            )}
+          </>
+        )}
+
+        {!legal?.checkoutAllowed && (
           <div className="legal-warning">
             <strong>Sprzedaż płatna nie jest jeszcze aktywna.</strong>
             <p>
-              Dane podmiotu prawnego odpowiedzialnego za sprzedaż i administrację
-              danymi muszą zostać uzupełnione przed uruchomieniem checkoutu.
+              {blockedReason ??
+                'Wymagane warunki prawne i podatkowe muszą zostać potwierdzone przed uruchomieniem checkoutu.'}
             </p>
           </div>
         )}
