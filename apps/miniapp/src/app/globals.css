@@ -99,8 +99,6 @@ button:disabled { opacity: .45; cursor: default; }
 .session-toolbar span { color: var(--muted); font-size: 12px; font-weight: 700; }
 .session-toolbar .compact { margin: 0; }
 
-.legal-footer { display: flex; justify-content: space-between; gap: 12px; align-items: center; margin-top: 18px; padding: 12px 4px; color: var(--muted); font-size: 12px; }
-.legal-footer a { color: var(--accent); text-decoration: none; font-weight: 750; }
 .legal-page h2 { margin-top: 26px; }
 .legal-page strong { color: var(--text); }
 .legal-warning { margin: 18px 0; padding: 14px; border: 1px solid rgba(255,212,154,.34); border-radius: 14px; background: rgba(255,212,154,.05); }
