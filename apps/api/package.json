@@ -6,7 +6,8 @@
     "dev": "tsx watch src/index.ts",
     "build": "tsc -p tsconfig.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "lint": "echo 'lint api'"
+    "lint": "echo 'lint api'",
+    "test": "tsx src/accounting/calculator.test.ts"
   },
   "dependencies": {
     "@dotacjapro/db": "workspace:*",
