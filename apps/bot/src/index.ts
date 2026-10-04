@@ -18,20 +18,66 @@ function isAdminTelegram(userId: number | undefined) {
 
 const bot = new Bot(token);
 
+function mainMenu(isAdmin = false) {
+  const keyboard = new InlineKeyboard()
+    .webApp('DoradcaPRO — otwórz aplikację', appBaseUrl).row()
+    .text('Sprawdź dotacje', 'menu:dotacje')
+    .text('Moja sprawa', 'menu:sprawa').row()
+    .text('Formularze i dokumenty', 'menu:dokumenty').row()
+    .text('Pakiety i materiały', 'menu:pakiety')
+    .text('Pomoc', 'menu:pomoc');
+  if (isAdmin) keyboard.row().text('Panel właściciela', 'menu:admin');
+  return keyboard;
+}
+
 bot.command('start', async (ctx) => {
-  const keyboard = new InlineKeyboard().webApp('Otwórz DotacjaPRO', appBaseUrl);
   await ctx.reply(
-    'DotacjaPRO sprawdzi dostępne finansowanie i poprowadzi Twoją sprawę na aktualnych, oficjalnych formularzach urzędowych.',
-    { reply_markup: keyboard }
+    '<b>DoradcaPRO</b>\n\nWybierz, co chcesz zrobić. DoradcaPRO prowadzi Cię przez finansowanie, sprawę i dokumenty z jednego menu.',
+    { parse_mode: 'HTML', reply_markup: mainMenu(isAdminTelegram(ctx.from?.id)) }
   );
 });
 
 bot.command('dotacje', async (ctx) => {
-  const keyboard = new InlineKeyboard().webApp('Sprawdź finansowanie', appBaseUrl);
   await ctx.reply(
-    'Otwórz DotacjaPRO, aby sprawdzić programy dopasowane do Twojego regionu i sytuacji.',
-    { reply_markup: keyboard }
+    '<b>DoradcaPRO — dotacje</b>\n\nSprawdź dostępne finansowanie albo otwórz aplikację, aby przejść pełną ścieżkę.',
+    { parse_mode: 'HTML', reply_markup: new InlineKeyboard().webApp('Sprawdź finansowanie', appBaseUrl).row().text('Wróć do menu', 'menu:home') }
   );
+});
+
+bot.callbackQuery('menu:home', async (ctx) => {
+  await ctx.answerCallbackQuery();
+  await ctx.editMessageText('<b>DoradcaPRO</b>\n\nWybierz, co chcesz zrobić.', { parse_mode: 'HTML', reply_markup: mainMenu(isAdminTelegram(ctx.from?.id)) });
+});
+
+bot.callbackQuery('menu:dotacje', async (ctx) => {
+  await ctx.answerCallbackQuery();
+  await ctx.editMessageText('<b>Sprawdź dotacje</b>\n\nDoradcaPRO dopasuje dostępne finansowanie do Twojej sytuacji i regionu.', { parse_mode: 'HTML', reply_markup: new InlineKeyboard().webApp('Uruchom DoradcęPRO', appBaseUrl).row().text('Wróć', 'menu:home') });
+});
+
+bot.callbackQuery('menu:sprawa', async (ctx) => {
+  await ctx.answerCallbackQuery();
+  await ctx.editMessageText('<b>Moja sprawa</b>\n\nOtwórz konto DoradcaPRO, aby zobaczyć swoją sprawę i jej aktualny etap.', { parse_mode: 'HTML', reply_markup: new InlineKeyboard().webApp('Otwórz moją sprawę', appBaseUrl).row().text('Wróć', 'menu:home') });
+});
+
+bot.callbackQuery('menu:dokumenty', async (ctx) => {
+  await ctx.answerCallbackQuery();
+  await ctx.editMessageText('<b>Formularze i dokumenty</b>\n\nDokumenty i formularze są dostępne na Twoim koncie DoradcaPRO.', { parse_mode: 'HTML', reply_markup: new InlineKeyboard().webApp('Otwórz dokumenty', appBaseUrl).row().text('Wróć', 'menu:home') });
+});
+
+bot.callbackQuery('menu:pakiety', async (ctx) => {
+  await ctx.answerCallbackQuery();
+  await ctx.editMessageText('<b>Pakiety i materiały</b>\n\nZobacz dostępne pakiety, materiały i przypisane zakupy.', { parse_mode: 'HTML', reply_markup: new InlineKeyboard().webApp('Zobacz pakiety', appBaseUrl).row().text('Wróć', 'menu:home') });
+});
+
+bot.callbackQuery('menu:pomoc', async (ctx) => {
+  await ctx.answerCallbackQuery();
+  await ctx.editMessageText('<b>Pomoc DoradcaPRO</b>\n\nWybierz funkcję z menu lub otwórz aplikację. Polecenie /help pokazuje także dostępne komendy.', { parse_mode: 'HTML', reply_markup: new InlineKeyboard().webApp('Otwórz DoradcęPRO', appBaseUrl).row().text('Wróć', 'menu:home') });
+});
+
+bot.callbackQuery('menu:admin', async (ctx) => {
+  await ctx.answerCallbackQuery();
+  if (!isAdminTelegram(ctx.from?.id)) return;
+  await ctx.editMessageText('<b>DoradcaPRO — panel właściciela</b>\n\nDostępne polecenia: /supervisor, /status, /ksiegowa.', { parse_mode: 'HTML', reply_markup: new InlineKeyboard().text('Wróć', 'menu:home') });
 });
 
 bot.command('whoami', async (ctx) => {
