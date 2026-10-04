@@ -2,36 +2,144 @@ import html
 import os
 from datetime import datetime, timezone
 
-LEGAL_VERSION = "2026-10-03.1"
+LEGAL_VERSION = "2026-10-04.1"
 
 
-def _seller_details() -> dict[str, str]:
-    return {
+def _env_bool(name: str, default: bool = False) -> bool:
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    return raw.strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _legal_context() -> dict:
+    operator_type = os.getenv("LEGAL_OPERATOR_TYPE", "UNREGISTERED_ACTIVITY")
+    representative_required = _env_bool(
+        "LEGAL_OPERATOR_REQUIRES_REPRESENTATIVE", False
+    )
+    tax_classification_confirmed = _env_bool(
+        "LEGAL_TAX_CLASSIFICATION_CONFIRMED", False
+    )
+    seller = {
         "brand": os.getenv("LEGAL_BRAND_NAME", "DotacjaPRO Bot"),
         "name": os.getenv("LEGAL_SELLER_NAME", ""),
         "address": os.getenv("LEGAL_SELLER_ADDRESS", ""),
         "email": os.getenv("LEGAL_SELLER_EMAIL", "qasupportmt@gmail.com"),
         "nip": os.getenv("LEGAL_SELLER_NIP", ""),
     }
-
-
-def legal_identity_complete() -> bool:
-    seller = _seller_details()
-    return bool(
+    representative = {
+        "name": os.getenv("LEGAL_REPRESENTATIVE_NAME", ""),
+        "email": os.getenv("LEGAL_REPRESENTATIVE_EMAIL", ""),
+    }
+    nip_required = (
+        operator_type != "UNREGISTERED_ACTIVITY"
+        or _env_bool("LEGAL_NIP_REQUIRED", False)
+    )
+    seller_complete = bool(
         seller["name"]
         and seller["address"]
         and seller["email"]
-        and seller["nip"]
+        and (seller["nip"] or not nip_required)
     )
+    representative_complete = (
+        not representative_required or bool(representative["name"])
+    )
+    legal_identity_complete = seller_complete and representative_complete
+
+    return {
+        "operator_type": operator_type,
+        "representative_required": representative_required,
+        "tax_classification_confirmed": tax_classification_confirmed,
+        "nip_required": nip_required,
+        "seller": seller,
+        "representative": representative,
+        "seller_complete": seller_complete,
+        "representative_complete": representative_complete,
+        "legal_identity_complete": legal_identity_complete,
+        "checkout_allowed": (
+            legal_identity_complete and tax_classification_confirmed
+        ),
+    }
+
+
+def _seller_details() -> dict[str, str]:
+    return _legal_context()["seller"]
+
+
+def legal_identity_complete() -> bool:
+    return bool(_legal_context()["legal_identity_complete"])
+
+
+def checkout_allowed() -> bool:
+    return bool(_legal_context()["checkout_allowed"])
 
 
 def legal_pack_text() -> str:
-    seller = _seller_details()
-    nip_line = f"NIP: {seller['nip']}\n" if seller["nip"] else ""
-    legal_identity = (
-        f"{seller['name']}\n{seller['address']}\n{nip_line}"
-        if legal_identity_complete()
-        else "Dane podmiotu prawnego nie zostały jeszcze skonfigurowane — sprzedaż konsumencka powinna pozostać wyłączona.\n"
+    context = _legal_context()
+    seller = context["seller"]
+    representative = context["representative"]
+
+    operator_label = (
+        "osoba fizyczna prowadząca działalność nierejestrowaną"
+        if context["operator_type"] == "UNREGISTERED_ACTIVITY"
+        else context["operator_type"]
+    )
+
+    seller_lines: list[str] = []
+    if seller["name"]:
+        seller_lines.append(seller["name"])
+    if seller["address"]:
+        seller_lines.append(seller["address"])
+    if seller["nip"]:
+        seller_lines.append(f"NIP: {seller['nip']}")
+    if not context["seller_complete"]:
+        seller_lines.append(
+            "Dane sprzedawcy / administratora nie są jeszcze kompletne — "
+            "sprzedaż konsumencka powinna pozostać wyłączona."
+        )
+
+    representative_lines: list[str] = []
+    if context["representative_required"]:
+        representative_lines.append("Wymagany przedstawiciel ustawowy.")
+        if representative["name"]:
+            representative_lines.append(
+                f"Przedstawiciel ustawowy: {representative['name']}"
+            )
+        else:
+            representative_lines.append(
+                "Dane przedstawiciela ustawowego nie zostały jeszcze skonfigurowane."
+            )
+        if representative["email"]:
+            representative_lines.append(
+                f"Kontakt przedstawiciela: {representative['email']}"
+            )
+
+    tax_status_line = (
+        "Klasyfikacja podatkowa/VAT przed uruchomieniem sprzedaży: POTWIERDZONA."
+        if context["tax_classification_confirmed"]
+        else "Klasyfikacja podatkowa/VAT przed uruchomieniem sprzedaży: "
+             "NIEPOTWIERDZONA — checkout powinien pozostać wyłączony."
+    )
+
+    nip_status_line = (
+        "NIP: wymagany dla skonfigurowanego modelu rozliczeń."
+        if context["nip_required"] and not seller["nip"]
+        else (
+            "NIP: skonfigurowany."
+            if seller["nip"]
+            else "NIP: nie jest wymagany przez sam fakt prowadzenia działalności "
+                 "nierejestrowanej; może stać się wymagany m.in. w związku z VAT, "
+                 "kasą rejestrującą lub KSeF."
+        )
+    )
+
+    seller_identity = "\n".join(seller_lines) or (
+        "Dane sprzedawcy / administratora nie zostały jeszcze skonfigurowane."
+    )
+    representative_identity = (
+        "\n" + "\n".join(representative_lines)
+        if representative_lines
+        else ""
     )
 
     return f"""DOTACJAPRO — WARUNKI KORZYSTANIA, LICENCJA, INFORMACJA PRAWNA I RODO
@@ -40,8 +148,17 @@ Wersja: {LEGAL_VERSION}
 MARKA / USŁUGA
 {seller['brand']}
 
+MODEL OPERATORA
+{operator_label}
+
 SPRZEDAWCA / ADMINISTRATOR DANYCH
-{legal_identity}Kontakt: {seller['email']}
+{seller_identity}
+Kontakt: {seller['email']}
+{nip_status_line}
+{representative_identity}
+
+STATUS PRZED URUCHOMIENIEM PŁATNOŚCI
+{tax_status_line}
 
 1. CHARAKTER MATERIAŁÓW
 Autorskie komentarze, checklisty, przykłady, wzory, instrukcje i materiały szkoleniowe DotacjaPRO mają charakter informacyjny i edukacyjny. Nie stanowią indywidualnej porady prawnej, podatkowej, księgowej, inwestycyjnej ani decyzji organu administracji.
