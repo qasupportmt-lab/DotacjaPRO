@@ -599,7 +599,7 @@ export default function Home() {
           throw new Error('Konto z tym adresem już istnieje. Wybierz logowanie.');
         }
         if (data.error === 'ACCOUNT_REQUIRES_LINKING') {
-          throw new Error('Ten e-mail jest już przypisany do konta Telegram. Zaloguj się przez Telegram i ustaw hasło do logowania web.');
+          throw new Error('Ten e-mail jest już przypisany do istniejącego konta. Zaloguj się powiązaną metodą i ustaw hasło do logowania web.');
         }
         if (data.error === 'INVALID_CREDENTIALS') {
           throw new Error('Nieprawidłowy e-mail lub hasło.');
@@ -624,14 +624,14 @@ export default function Home() {
     setError(null);
     try {
       const initData = window.Telegram?.WebApp?.initData;
-      if (!initData) throw new Error('Telegram nie jest dostępny w tej przeglądarce.');
+      if (!initData) throw new Error('Ta metoda logowania nie jest dostępna w tej przeglądarce.');
 
       const res = await fetch(`${API}/v1/auth/telegram`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ initData })
       });
-      if (!res.ok) throw new Error('Nie udało się zalogować przez Telegram.');
+      if (!res.ok) throw new Error('Nie udało się zalogować tą metodą.');
 
       const data = await res.json();
       routeAfterAuthentication(data, 'telegram');
@@ -1347,7 +1347,7 @@ export default function Home() {
 
       {token && (
         <section className="session-toolbar">
-          <span>{authChannel === 'telegram' ? 'Połączono przez Telegram' : 'Konto web'}</span>
+          <span>Zalogowano do DoradcaPRO</span>
           <button className="secondary compact" onClick={logout}>
             Wyloguj
           </button>
@@ -1541,8 +1541,7 @@ export default function Home() {
         {step === 'welcome' && <>
           <h2>Zaloguj się do DotacjaPRO</h2>
           <p>
-            Możesz korzystać z aplikacji bez Telegrama. Konto web działa w Safari,
-            Chrome i innych przeglądarkach, a Telegram możesz połączyć później.
+            Konto DoradcaPRO działa w Safari, Chrome i innych nowoczesnych przeglądarkach.
           </p>
 
           <div className="auth-tabs">
@@ -1661,7 +1660,7 @@ export default function Home() {
             <>
               <div className="auth-divider"><span>lub</span></div>
               <button className="secondary" onClick={authenticate} disabled={busy}>
-                Kontynuuj przez Telegram
+                Kontynuuj bez hasła
               </button>
             </>
           )}
@@ -2303,7 +2302,8 @@ export default function Home() {
       </section>
 
       <footer className="legal-footer">
-        <span>DotacjaPRO Bot</span>
+        <span>DoradcaPRO</span>
+        <span>Projekt i koncepcja: właściciel DoradcaPRO</span>
         <a href="/legal">Regulamin · Licencja · RODO</a>
       </footer>
     </main>
