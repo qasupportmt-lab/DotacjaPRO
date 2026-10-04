@@ -317,7 +317,7 @@ export async function registerAccountingRoutes(
       refundedAt: input.refundedAt ? new Date(input.refundedAt) : null,
       isTest: input.isTest,
       description: input.description ?? null,
-      metadata: input.metadata ?? undefined
+      metadata: (input.metadata ?? undefined) as any
     };
 
     const changed =
@@ -426,7 +426,7 @@ export async function registerAccountingRoutes(
         description: input.description ?? null,
         documentReference: input.documentReference ?? null,
         deductible: input.deductible,
-        metadata: input.metadata ?? undefined
+        metadata: (input.metadata ?? undefined) as any
       }
     });
 
