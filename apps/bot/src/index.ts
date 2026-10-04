@@ -41,6 +41,83 @@ bot.command('whoami', async (ctx) => {
   );
 });
 
+bot.command('ksiegowa', async (ctx) => {
+  if (!workerSecret) {
+    return ctx.reply('Moduł Księgowa nie jest jeszcze skonfigurowany.');
+  }
+
+  const telegramUserId = String(ctx.from?.id ?? '');
+  if (!telegramUserId) {
+    return ctx.reply('Nie mogę ustalić Twojego identyfikatora Telegram.');
+  }
+
+  try {
+    const response = await fetch(
+      apiBaseUrl.replace(/\/$/, '') +
+        '/v1/internal/accounting/summary?telegramUserId=' +
+        encodeURIComponent(telegramUserId),
+      {
+        headers: { 'x-worker-secret': workerSecret },
+        signal: AbortSignal.timeout(10_000)
+      }
+    );
+
+    if (response.status === 403) {
+      return ctx.reply('Ta funkcja jest dostępna tylko dla administratora DotacjaPRO.');
+    }
+    if (!response.ok) {
+      throw new Error('Accounting summary HTTP ' + response.status);
+    }
+
+    const data = await response.json() as {
+      quarter: {
+        year: number;
+        quarter: number;
+        dueRevenuePln: string;
+        limitPln: string | null;
+        remainingPln: string | null;
+        thresholdExceeded: boolean | null;
+        exceededByPln: string | null;
+      };
+      pit36: {
+        year: number;
+        revenueCandidatePln: string;
+        deductibleCostsPln: string;
+        incomeCandidatePln: string;
+        reviewRequired: boolean;
+      };
+    };
+
+    const q = data.quarter;
+    const pit = data.pit36;
+    const limitLine =
+      q.limitPln === null
+        ? 'Limit: wymaga aktualizacji prawnej'
+        : q.thresholdExceeded
+          ? `Limit przekroczony o: ${q.exceededByPln} zł`
+          : `Do limitu zostało: ${q.remainingPln} zł`;
+
+    await ctx.reply(
+      [
+        '<b>DotacjaPRO — Księgowa</b>',
+        `Q${q.quarter} ${q.year}: ${q.dueRevenuePln} zł / ${q.limitPln ?? '—'} zł`,
+        limitLine,
+        '',
+        `PIT-36 ${pit.year} — przychód: ${pit.revenueCandidatePln} zł`,
+        `Koszty udokumentowane: ${pit.deductibleCostsPln} zł`,
+        `Dochód roboczy: ${pit.incomeCandidatePln} zł`,
+        pit.reviewRequired
+          ? 'Status: wymagana weryfikacja pozycji oznaczonych przez silnik.'
+          : 'Status: brak wykrytych wyjątków wymagających ręcznej weryfikacji.'
+      ].join('\n'),
+      { parse_mode: 'HTML' }
+    );
+  } catch (error) {
+    console.error('Accounting command failed', error);
+    await ctx.reply('Nie udało się pobrać podsumowania Księgowej. Spróbuj ponownie później.');
+  }
+});
+
 bot.command('help', async (ctx) => {
   const keyboard = new InlineKeyboard().webApp('Otwórz DotacjaPRO', appBaseUrl);
   await ctx.reply(
@@ -49,6 +126,7 @@ bot.command('help', async (ctx) => {
       '/start — otwórz aplikację',
       '/dotacje — sprawdź dostępne finansowanie',
       '/whoami — pokaż Twój Telegram ID',
+      '/ksiegowa — sprzedaż, limit i podgląd PIT-36',
       '/help — lista poleceń'
     ].join('\n'),
     { parse_mode: 'HTML', reply_markup: keyboard }
