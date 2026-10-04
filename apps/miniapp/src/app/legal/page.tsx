@@ -59,14 +59,14 @@ export default async function LegalPage() {
     legal = null;
   }
 
-  const brand = legal?.seller?.brand ?? 'DotacjaPRO Bot';
+  const brand = legal?.seller?.brand ?? 'DoradcaPRO';
   const contact = legal?.seller?.email ?? 'qasupportmt@gmail.com';
   const blockedReason = blockedReasonLabel(legal?.checkoutBlockedReason);
 
   return (
     <main className="shell">
       <section className="brand">
-        <div className="eyebrow">DOTACJAPRO BOT</div>
+        <div className="eyebrow">DORADCAPRO</div>
         <h1>Regulamin, licencja i RODO</h1>
         <p>Aktualne informacje prawne dotyczące korzystania z DotacjaPRO.</p>
       </section>
