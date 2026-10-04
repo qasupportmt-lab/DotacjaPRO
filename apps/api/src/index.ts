@@ -455,6 +455,15 @@ function configuredAdminTelegramIds() {
   );
 }
 
+function configuredAdminEmails() {
+  return new Set(
+    (process.env.ADMIN_EMAILS ?? '')
+      .split(',')
+      .map((value) => value.trim().toLowerCase())
+      .filter(Boolean)
+  );
+}
+
 function isAdminTelegramUserId(telegramUserId: string | null | undefined) {
   return Boolean(
     telegramUserId &&
@@ -462,14 +471,28 @@ function isAdminTelegramUserId(telegramUserId: string | null | undefined) {
   );
 }
 
+function isAdminEmail(email: string | null | undefined) {
+  return Boolean(
+    email &&
+    configuredAdminEmails().has(email.toLowerCase())
+  );
+}
+
+function isAdminIdentity(user: {
+  telegramUserId?: string | null;
+  email?: string | null;
+}) {
+  return isAdminTelegramUserId(user.telegramUserId) || isAdminEmail(user.email);
+}
+
 async function requireAdminUserId(request: FastifyRequest) {
   const userId = await requireUserId(request);
   const user = await prisma.user.findUnique({
     where: { id: userId },
-    select: { telegramUserId: true }
+    select: { telegramUserId: true, email: true }
   });
 
-  if (!user || !isAdminTelegramUserId(user.telegramUserId)) {
+  if (!user || !isAdminIdentity(user)) {
     throw Object.assign(new Error('Forbidden'), { statusCode: 403 });
   }
 
@@ -874,7 +897,10 @@ function userAuthView(user: {
       web: Boolean(user.webPasswordHash),
       telegram: Boolean(user.telegramUserId)
     },
-    isAdmin: isAdminTelegramUserId(user.telegramUserId)
+    isAdmin: isAdminIdentity({
+      telegramUserId: user.telegramUserId,
+      email: user.email
+    })
   };
 }
 
@@ -1129,7 +1155,10 @@ app.post('/v1/auth/telegram', async (request, reply) => {
         profile: user.profile,
         fundingProfile: user.fundingProfile,
         notificationPreference: user.notificationPreference,
-        isAdmin: isAdminTelegramUserId(user.telegramUserId)
+        isAdmin: isAdminIdentity({
+          telegramUserId: user.telegramUserId,
+          email: user.email
+        })
       }
     };
   } catch (error) {
