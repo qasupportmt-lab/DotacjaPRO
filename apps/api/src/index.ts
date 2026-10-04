@@ -24,6 +24,9 @@ import {
   LEGAL_STATEMENTS_SHA256,
   LEGAL_VERSION
 } from './legal/policy.js';
+import { getLegalOperatorState } from './legal/operator.js';
+import { registerAccountingRoutes } from './accounting/routes.js';
+import { registerCommerceRoutes } from './commerce/routes.js';
 
 const app = Fastify({ logger: true, bodyLimit: 35 * 1024 * 1024 });
 
@@ -303,81 +306,12 @@ app.get('/v1/system/policy', async () => ({
   source_verification_required: true
 }));
 
-function envBoolean(name: string, fallback = false) {
-  const raw = process.env[name];
-  if (raw === undefined) return fallback;
-  return /^(1|true|yes|on)$/i.test(raw.trim());
-}
-
-app.get('/v1/legal/current', async () => {
-  const operatorType =
-    process.env.LEGAL_OPERATOR_TYPE ?? 'UNREGISTERED_ACTIVITY';
-  const representativeRequired = envBoolean(
-    'LEGAL_OPERATOR_REQUIRES_REPRESENTATIVE',
-    false
-  );
-  const taxClassificationConfirmed = envBoolean(
-    'LEGAL_TAX_CLASSIFICATION_CONFIRMED',
-    false
-  );
-
-  const seller = {
-    brand: process.env.LEGAL_BRAND_NAME ?? 'DotacjaPRO Bot',
-    name: process.env.LEGAL_SELLER_NAME ?? null,
-    address: process.env.LEGAL_SELLER_ADDRESS ?? null,
-    email: process.env.LEGAL_SELLER_EMAIL ?? process.env.EMAIL_FROM ?? null,
-    nip: process.env.LEGAL_SELLER_NIP ?? null
-  };
-
-  const representative = {
-    name: process.env.LEGAL_REPRESENTATIVE_NAME ?? null,
-    email: process.env.LEGAL_REPRESENTATIVE_EMAIL ?? null
-  };
-
-  const nipRequired =
-    operatorType !== 'UNREGISTERED_ACTIVITY' ||
-    envBoolean('LEGAL_NIP_REQUIRED', false);
-
-  const sellerIdentityComplete = Boolean(
-    seller.name &&
-    seller.address &&
-    seller.email &&
-    (!nipRequired || seller.nip)
-  );
-
-  const representativeComplete =
-    !representativeRequired || Boolean(representative.name);
-
-  const legalIdentityComplete =
-    sellerIdentityComplete && representativeComplete;
-
-  const checkoutAllowed =
-    legalIdentityComplete && taxClassificationConfirmed;
-
-  let checkoutBlockedReason: string | null = null;
-  if (!sellerIdentityComplete) {
-    checkoutBlockedReason = 'LEGAL_SELLER_IDENTITY_INCOMPLETE';
-  } else if (!representativeComplete) {
-    checkoutBlockedReason = 'LEGAL_REPRESENTATIVE_REQUIRED';
-  } else if (!taxClassificationConfirmed) {
-    checkoutBlockedReason = 'LEGAL_TAX_CLASSIFICATION_UNCONFIRMED';
-  }
-
-  return {
-    version: LEGAL_VERSION,
-    sha256: LEGAL_STATEMENTS_SHA256,
-    statements: LEGAL_STATEMENTS,
-    operatorType,
-    representativeRequired,
-    representative,
-    taxClassificationConfirmed,
-    nipRequired,
-    seller,
-    legalIdentityComplete,
-    checkoutAllowed,
-    checkoutBlockedReason
-  };
-});
+app.get('/v1/legal/current', async () => ({
+  version: LEGAL_VERSION,
+  sha256: LEGAL_STATEMENTS_SHA256,
+  statements: LEGAL_STATEMENTS,
+  ...getLegalOperatorState()
+}));
 
 const legalAcceptanceSchema = z.object({
   version: z.literal(LEGAL_VERSION),
@@ -5162,6 +5096,17 @@ app.post('/v1/internal/notifications/:id/delivery', async (request, reply) => {
   return { notificationId: notification.id, success: parsed.data.success };
 });
 
+
+await registerAccountingRoutes(app, {
+  requireWorkerSecret,
+  requireAdminUserId
+});
+
+await registerCommerceRoutes(app, {
+  requireWorkerSecret,
+  requireUserId,
+  requireAdminUserId
+});
 
 app.setErrorHandler((error, request, reply) => {
   const statusCode = (error as Error & { statusCode?: number }).statusCode ?? 500;
