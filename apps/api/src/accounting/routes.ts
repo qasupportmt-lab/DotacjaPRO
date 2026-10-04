@@ -189,8 +189,14 @@ async function queueAdminSaleAlert(
   let queued = 0;
 
   for (const user of users) {
-    if (!user.telegramUserId || !user.notificationPreference?.telegramWriteAccess) {
-      continue;
+    if (!user.telegramUserId) continue;
+
+    if (!user.notificationPreference?.telegramWriteAccess) {
+      await prisma.notificationPreference.upsert({
+        where: { userId: user.id },
+        update: { telegramWriteAccess: true },
+        create: { userId: user.id, telegramWriteAccess: true }
+      });
     }
 
     const remaining = summary.quarter.remainingPln;
