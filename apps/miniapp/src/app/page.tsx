@@ -151,6 +151,27 @@ type AdminReviewQueue = {
   formTemplates: Array<Record<string, any>>;
 };
 
+type AdminAccountingSummary = {
+  generatedAt: string;
+  quarter: {
+    year: number;
+    quarter: number;
+    dueRevenuePln: string;
+    limitPln: string | null;
+    remainingPln: string | null;
+    exceededByPln: string | null;
+    thresholdExceeded: boolean | null;
+  };
+  pit36: {
+    year: number;
+    revenueCandidatePln: string;
+    deductibleCostsPln: string;
+    incomeCandidatePln: string;
+    reviewRequired: boolean;
+    reviewReasons: string[];
+  };
+};
+
 
 
 const API = process.env.NEXT_PUBLIC_API_BASE_URL ?? 'http://localhost:4000';
@@ -212,6 +233,7 @@ export default function Home() {
   const [isAdmin, setIsAdmin] = useState(false);
   const [adminMode, setAdminMode] = useState(false);
   const [adminQueue, setAdminQueue] = useState<AdminReviewQueue | null>(null);
+  const [adminAccounting, setAdminAccounting] = useState<AdminAccountingSummary | null>(null);
   const [adminMessage, setAdminMessage] = useState<string | null>(null);
 
   const authHeaders = useMemo(
@@ -648,12 +670,44 @@ export default function Home() {
     }
   }
 
+  async function loadAdminAccounting(sessionToken = token) {
+    if (!sessionToken) return;
+    try {
+      const res = await fetch(
+        `${API}/v1/admin/accounting/summary`,
+        {
+          headers: {
+            Authorization: `Bearer ${sessionToken}`,
+            'Content-Type': 'application/json'
+          }
+        }
+      );
+
+      if (!res.ok) {
+        throw new Error('Nie udało się pobrać podsumowania Księgowej.');
+      }
+
+      const data = await res.json();
+      setAdminAccounting(data);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Błąd modułu Księgowa');
+    }
+  }
+
+  async function refreshAdminPanel(sessionToken = token) {
+    if (!sessionToken) return;
+    await Promise.all([
+      loadAdminQueue(sessionToken),
+      loadAdminAccounting(sessionToken)
+    ]);
+  }
+
   async function toggleAdminMode() {
     const next = !adminMode;
     setAdminMode(next);
     setAdminMessage(null);
-    if (next && !adminQueue) {
-      await loadAdminQueue();
+    if (next) {
+      await refreshAdminPanel();
     }
   }
 
@@ -1297,14 +1351,55 @@ export default function Home() {
           <div className="admin-head">
             <div>
               <span className="eyebrow">ADMIN</span>
-              <h2>Kolejka weryfikacji</h2>
-              <p>Każdy element musi zostać porównany z podlinkowanym źródłem urzędowym przed zatwierdzeniem.</p>
+              <h2>Panel administratora</h2>
+              <p>Weryfikacja źródeł urzędowych oraz bieżąca kontrola sprzedaży i rozliczeń.</p>
             </div>
-            <button className="secondary compact" onClick={() => loadAdminQueue()} disabled={busy}>
+            <button className="secondary compact" onClick={() => refreshAdminPanel()} disabled={busy}>
               Odśwież
             </button>
           </div>
 
+          {adminAccounting && (
+            <div className="accounting-summary">
+              <div className="accounting-stat">
+                <span>Sprzedaż należna · Q{adminAccounting.quarter.quarter} {adminAccounting.quarter.year}</span>
+                <strong>{adminAccounting.quarter.dueRevenuePln} zł</strong>
+              </div>
+              <div className="accounting-stat">
+                <span>Limit działalności nierejestrowanej</span>
+                <strong>{adminAccounting.quarter.limitPln ?? 'wymaga aktualizacji'} zł</strong>
+              </div>
+              <div className={adminAccounting.quarter.thresholdExceeded ? 'accounting-stat danger-stat' : 'accounting-stat'}>
+                <span>{adminAccounting.quarter.thresholdExceeded ? 'Przekroczenie limitu' : 'Pozostało do limitu'}</span>
+                <strong>
+                  {adminAccounting.quarter.thresholdExceeded
+                    ? `${adminAccounting.quarter.exceededByPln} zł`
+                    : adminAccounting.quarter.remainingPln
+                      ? `${adminAccounting.quarter.remainingPln} zł`
+                      : '—'}
+                </strong>
+              </div>
+              <div className="accounting-stat">
+                <span>PIT-36 · przychód otrzymany po korektach</span>
+                <strong>{adminAccounting.pit36.revenueCandidatePln} zł</strong>
+              </div>
+              <div className="accounting-stat">
+                <span>Udokumentowane koszty</span>
+                <strong>{adminAccounting.pit36.deductibleCostsPln} zł</strong>
+              </div>
+              <div className="accounting-stat">
+                <span>Dochód roboczy</span>
+                <strong>{adminAccounting.pit36.incomeCandidatePln} zł</strong>
+              </div>
+              {adminAccounting.pit36.reviewRequired && (
+                <p className="warning">
+                  Księgowa oznaczyła pozycje wymagające weryfikacji: {adminAccounting.pit36.reviewReasons.join(', ')}
+                </p>
+              )}
+            </div>
+          )}
+
+          <h3 className="admin-section-title">Kolejka weryfikacji</h3>
           {adminMessage && <p className="verified">{adminMessage}</p>}
 
           {!adminQueue ? (
