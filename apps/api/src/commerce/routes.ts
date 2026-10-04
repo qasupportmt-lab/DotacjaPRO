@@ -443,7 +443,16 @@ export async function registerCommerceRoutes(
       }
     });
 
-    if (existingEvent?.processedAt) {
+    if (
+      existingEvent &&
+      existingEvent.payloadSha256 !== payloadSha256
+    ) {
+      return reply.code(409).send({
+        error: 'PAYMENT_EVENT_PAYLOAD_MISMATCH'
+      });
+    }
+
+    if (existingEvent?.processedAt && existingEvent.status === 'PROCESSED') {
       return {
         status: 'IDEMPOTENT_REPLAY',
         eventId: existingEvent.id
@@ -460,6 +469,23 @@ export async function registerCommerceRoutes(
     if (order.currency !== input.currency) {
       return reply.code(409).send({ error: 'PAYMENT_CURRENCY_MISMATCH' });
     }
+    if (order.provider && order.provider !== input.provider) {
+      return reply.code(409).send({ error: 'PAYMENT_PROVIDER_MISMATCH' });
+    }
+
+    const existingPayment = await prisma.paymentRecord.findUnique({
+      where: {
+        provider_providerPaymentId: {
+          provider: input.provider,
+          providerPaymentId: input.providerPaymentId
+        }
+      },
+      select: { orderId: true }
+    });
+    if (existingPayment && existingPayment.orderId !== order.id) {
+      return reply.code(409).send({ error: 'PAYMENT_ORDER_MISMATCH' });
+    }
+
     if (
       ['COMPLETED', 'PARTIALLY_REFUNDED', 'REFUNDED'].includes(input.status) &&
       input.amountReceivedGrosz < order.amountGrossGrosz
