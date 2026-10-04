@@ -205,6 +205,7 @@ export default function Home() {
     city: string;
     municipality: string;
     county: string | null;
+    voivodeship?: string;
     pup: { id: string; name: string; officialUrl: string } | null;
     terytVerified: boolean;
     terytMunicipalityCode?: string;
@@ -358,17 +359,17 @@ export default function Home() {
   }, [caseId, packageJob?.id, packageJob?.status, authHeaders]);
 
   useEffect(() => {
-    if (step !== 'region' || !region.voivodeship || region.city.trim().length < 2) {
+    if (step !== 'region' || region.city.trim().length < 2) {
       setRegionSuggestions([]);
       return;
     }
 
     const controller = new AbortController();
     const timer = window.setTimeout(async () => {
-      const params = new URLSearchParams({
-        voivodeship: region.voivodeship,
-        q: region.city.trim()
-      });
+      const params = new URLSearchParams({ q: region.city.trim() });
+      if (region.voivodeship) {
+        params.set('voivodeship', region.voivodeship);
+      }
 
       try {
         const terytResponse = await fetch(
@@ -383,6 +384,7 @@ export default function Home() {
             city: item.locality.name,
             municipality: item.municipality.name,
             county: item.municipality.county,
+            voivodeship: item.municipality.voivodeship,
             pup: item.pup,
             terytVerified: true,
             terytMunicipalityCode: item.municipality.tercCode,
@@ -393,6 +395,11 @@ export default function Home() {
             setRegionSuggestions(items);
             return;
           }
+        }
+
+        if (!region.voivodeship) {
+          setRegionSuggestions([]);
+          return;
         }
 
         const routingResponse = await fetch(
@@ -409,6 +416,7 @@ export default function Home() {
             city: item.city ?? label,
             municipality: item.municipality ?? label,
             county: item.county ?? null,
+            voivodeship: item.voivodeship ?? region.voivodeship,
             pup: item.pup ?? null,
             terytVerified: false
           };
@@ -847,7 +855,15 @@ export default function Home() {
         headers: authHeaders,
         body: JSON.stringify(body)
       });
-      if (!res.ok) throw new Error('Nie udało się zapisać regionu.');
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        const messages: Record<string, string> = {
+          INVALID_REGION: 'Sprawdź miejscowość i dane regionu.',
+          TERYT_MUNICIPALITY_NOT_VERIFIED: 'Nie udało się potwierdzić gminy w TERYT. Wybierz miejscowość z podpowiedzi.',
+          TERYT_LOCALITY_NOT_VERIFIED: 'Nie udało się potwierdzić miejscowości w TERYT. Wybierz ją ponownie z podpowiedzi.'
+        };
+        throw new Error(messages[data.error] ?? `Nie udało się zapisać regionu (${res.status}).`);
+      }
       setStep(authChannel === 'web' && email ? 'employment' : 'email');
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Błąd zapisu');
@@ -1718,10 +1734,10 @@ export default function Home() {
         {step === 'region' && <>
           <h2>Gdzie mieszkasz?</h2>
           <p>Na tej podstawie przypiszemy właściwy PUP, WUP, LGD oraz programy regionalne.</p>
-          <label>Województwo<select value={region.voivodeship} onChange={e => setRegion({...region, voivodeship:e.target.value})}>
+          <label>Województwo <small>uzupełnimy po wyborze miejscowości</small><select value={region.voivodeship} onChange={e => setRegion({...region, voivodeship:e.target.value})}>
             <option value="">Wybierz</option>{VOIVODESHIPS.map(v => <option key={v}>{v}</option>)}
           </select></label>
-          <label>Miasto / miejscowość<input value={region.city} onChange={e => {
+          <label>Miasto / miejscowość <small>zacznij tutaj</small><input value={region.city} onChange={e => {
             setRegion({
               ...region,
               city: e.target.value,
@@ -1739,6 +1755,7 @@ export default function Home() {
                 onClick={() => {
                   setRegion({
                     ...region,
+                    voivodeship: item.voivodeship ?? region.voivodeship,
                     city: item.city,
                     municipality: item.municipality,
                     county: item.county ?? '',
