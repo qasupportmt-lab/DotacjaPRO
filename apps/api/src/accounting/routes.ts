@@ -82,8 +82,29 @@ function adminTelegramIds() {
     .filter((value) => /^\d+$/.test(value));
 }
 
-function telegramAdminAllowed(telegramUserId: string) {
-  return adminTelegramIds().includes(telegramUserId);
+function adminEmails() {
+  return (process.env.ADMIN_EMAILS ?? '')
+    .split(',')
+    .map((value) => value.trim().toLowerCase())
+    .filter(Boolean);
+}
+
+async function telegramAdminAllowed(telegramUserId: string) {
+  if (adminTelegramIds().includes(telegramUserId)) {
+    return true;
+  }
+
+  const emails = adminEmails();
+  if (emails.length === 0) {
+    return false;
+  }
+
+  const user = await prisma.user.findUnique({
+    where: { telegramUserId },
+    select: { email: true }
+  });
+
+  return Boolean(user?.email && emails.includes(user.email.toLowerCase()));
 }
 
 function safeYear(value: unknown) {
@@ -172,10 +193,19 @@ async function queueAdminSaleAlert(
   quarter: number
 ) {
   const ids = adminTelegramIds();
-  if (ids.length === 0) return { queued: 0, botDeliveryTriggered: false };
+  const emails = adminEmails();
+
+  if (ids.length === 0 && emails.length === 0) {
+    return { queued: 0, botDeliveryTriggered: false };
+  }
 
   const users = await prisma.user.findMany({
-    where: { telegramUserId: { in: ids } },
+    where: {
+      OR: [
+        ...(ids.length > 0 ? [{ telegramUserId: { in: ids } }] : []),
+        ...(emails.length > 0 ? [{ email: { in: emails, mode: 'insensitive' as const } }] : [])
+      ]
+    },
     select: {
       id: true,
       telegramUserId: true,
@@ -384,7 +414,10 @@ export async function registerAccountingRoutes(
       quarter?: string;
     };
 
-    if (!query.telegramUserId || !telegramAdminAllowed(query.telegramUserId)) {
+    if (
+      !query.telegramUserId ||
+      !(await telegramAdminAllowed(query.telegramUserId))
+    ) {
       return reply.code(403).send({ error: 'ADMIN_TELEGRAM_REQUIRED' });
     }
 
