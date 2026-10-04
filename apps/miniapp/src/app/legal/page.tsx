@@ -68,7 +68,7 @@ export default async function LegalPage() {
       <section className="brand">
         <div className="eyebrow">DORADCAPRO</div>
         <h1>Regulamin, licencja i RODO</h1>
-        <p>Aktualne informacje prawne dotyczące korzystania z DotacjaPRO.</p>
+        <p>Aktualne informacje prawne dotyczące korzystania z DoradcaPRO.</p>
       </section>
 
       <section className="card legal-page">
@@ -117,7 +117,7 @@ export default async function LegalPage() {
         <h2>Charakter materiałów</h2>
         <p>
           Autorskie komentarze, checklisty, instrukcje, przykłady i materiały
-          szkoleniowe DotacjaPRO mają charakter informacyjny i edukacyjny.
+          szkoleniowe DoradcaPRO mają charakter informacyjny i edukacyjny.
           Oficjalne formularze urzędowe mogą służyć do przygotowania własnej
           sprawy po sprawdzeniu aktualności właściwego naboru.
         </p>
@@ -125,7 +125,7 @@ export default async function LegalPage() {
         <h2>Licencja</h2>
         <p>
           Zakup nie przenosi autorskich praw majątkowych do autorskich materiałów
-          DotacjaPRO. Bez odrębnej zgody zabroniona jest ich odsprzedaż,
+          DoradcaPRO. Bez odrębnej zgody zabroniona jest ich odsprzedaż,
           sublicencjonowanie, publiczne rozpowszechnianie i tworzenie na ich
           podstawie konkurencyjnej biblioteki lub produktu, z zachowaniem
           wyjątków wynikających z bezwzględnie obowiązującego prawa.
@@ -133,7 +133,7 @@ export default async function LegalPage() {
 
         <h2>Brak gwarancji wyniku</h2>
         <p>
-          DotacjaPRO nie gwarantuje przyznania dotacji, określonej punktacji ani
+          DoradcaPRO nie gwarantuje przyznania dotacji, określonej punktacji ani
           pozytywnego rozstrzygnięcia. Ostateczna decyzja należy do właściwej
           instytucji, a użytkownik odpowiada za prawdziwość i kompletność swoich
           danych.
@@ -160,7 +160,7 @@ export default async function LegalPage() {
           </p>
         )}
 
-        <a className="source-link" href="/">← Wróć do DotacjaPRO</a>
+        <a className="source-link" href="/">← Wróć do DoradcaPRO</a>
       </section>
     </main>
   );
