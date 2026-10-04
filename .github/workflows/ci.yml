@@ -20,6 +20,7 @@ jobs:
         env:
           DATABASE_URL: postgresql://dotacjapro:dotacjapro@localhost:5432/dotacjapro
       - run: pnpm typecheck
+      - run: pnpm --filter @dotacjapro/api test
       - run: pnpm --filter @dotacjapro/rules test
 
 
