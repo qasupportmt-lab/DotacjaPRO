@@ -26,6 +26,8 @@ model User {
   notifications         Notification[]
   auditEvents           AuditEvent[]
   emailVerifications    EmailVerification[]
+  accountingSales       SaleTransaction[]
+  accountingExpenses    AccountingExpense[] @relation("AccountingExpenseCreator")
 }
 
 model UserProfile {
@@ -532,6 +534,53 @@ model DocumentPackageJob {
   @@index([submissionInstructionId])
 }
 
+
+
+model SaleTransaction {
+  id                    String   @id @default(cuid())
+  userId                String?
+  user                  User?    @relation(fields: [userId], references: [id], onDelete: SetNull)
+  provider              String
+  providerTransactionId String
+  providerOrderId       String?
+  status                String   @default("COMPLETED")
+  currency              String   @default("PLN")
+  amountDueGrosz        Int
+  amountReceivedGrosz   Int      @default(0)
+  refundedGrosz         Int      @default(0)
+  dueAt                 DateTime
+  receivedAt            DateTime?
+  refundedAt            DateTime?
+  isTest                Boolean  @default(false)
+  description           String?
+  metadata              Json?
+  createdAt             DateTime @default(now())
+  updatedAt             DateTime @updatedAt
+
+  @@unique([provider, providerTransactionId])
+  @@index([dueAt, status, isTest])
+  @@index([receivedAt, status, isTest])
+  @@index([userId])
+}
+
+model AccountingExpense {
+  id                String   @id @default(cuid())
+  createdByUserId   String?
+  createdByUser     User?    @relation("AccountingExpenseCreator", fields: [createdByUserId], references: [id], onDelete: SetNull)
+  amountGrosz       Int
+  currency          String   @default("PLN")
+  incurredAt        DateTime
+  category          String
+  description       String?
+  documentReference String?
+  deductible        Boolean  @default(true)
+  metadata          Json?
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  @@index([incurredAt, deductible])
+  @@index([createdByUserId])
+}
 
 model StoredObject {
   id         String   @id @default(cuid())
