@@ -1,6 +1,6 @@
 import crypto from 'node:crypto';
 
-export const LEGAL_VERSION = '2026-10-03.1';
+export const LEGAL_VERSION = '2026-10-04.1';
 
 export const LEGAL_STATEMENTS = {
   terms:
