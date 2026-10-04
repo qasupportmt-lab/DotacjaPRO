@@ -27,6 +27,7 @@ import {
 import { getLegalOperatorState } from './legal/operator.js';
 import { registerAccountingRoutes } from './accounting/routes.js';
 import { registerCommerceRoutes } from './commerce/routes.js';
+import { registerSupervisorRoutes } from './supervisor/routes.js';
 
 const app = Fastify({ logger: true, bodyLimit: 35 * 1024 * 1024 });
 
@@ -5112,6 +5113,8 @@ await registerCommerceRoutes(app, {
   requireUserId,
   requireAdminUserId
 });
+
+await registerSupervisorRoutes(app, { requireWorkerSecret });
 
 app.setErrorHandler((error, request, reply) => {
   const statusCode = (error as Error & { statusCode?: number }).statusCode ?? 500;
