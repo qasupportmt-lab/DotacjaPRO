@@ -135,6 +135,9 @@ bot.command('help', async (ctx) => {
 
 bot.catch((err) => console.error('Bot error', err));
 
+// Webhook mode still requires grammY to resolve botInfo before handleUpdate().
+await bot.init();
+
 function escapeHtml(value: string) {
   return value
     .replaceAll('&', '&amp;')
