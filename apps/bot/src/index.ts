@@ -135,9 +135,6 @@ bot.command('help', async (ctx) => {
 
 bot.catch((err) => console.error('Bot error', err));
 
-// Webhook mode still requires grammY to resolve botInfo before handleUpdate().
-await bot.init();
-
 function escapeHtml(value: string) {
   return value
     .replaceAll('&', '&amp;')
@@ -382,12 +379,23 @@ const server = http.createServer(async (request, response) => {
 });
 
 const port = Number(process.env.PORT ?? 4100);
-server.listen(port, '0.0.0.0', () => {
-  void configureWebhook()
-    .then(() => {
-      console.log('Telegram webhook configured');
-    })
-    .catch((error) => {
-      console.error('Telegram webhook configuration failed', error);
-    });
+
+async function startServer() {
+  // Webhook mode still requires grammY to resolve botInfo before handleUpdate().
+  await bot.init();
+
+  server.listen(port, '0.0.0.0', () => {
+    void configureWebhook()
+      .then(() => {
+        console.log('Telegram webhook configured');
+      })
+      .catch((error) => {
+        console.error('Telegram webhook configuration failed', error);
+      });
+  });
+}
+
+void startServer().catch((error) => {
+  console.error('Telegram bot startup failed', error);
+  process.exitCode = 1;
 });
