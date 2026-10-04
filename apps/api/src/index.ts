@@ -303,7 +303,24 @@ app.get('/v1/system/policy', async () => ({
   source_verification_required: true
 }));
 
+function envBoolean(name: string, fallback = false) {
+  const raw = process.env[name];
+  if (raw === undefined) return fallback;
+  return /^(1|true|yes|on)$/i.test(raw.trim());
+}
+
 app.get('/v1/legal/current', async () => {
+  const operatorType =
+    process.env.LEGAL_OPERATOR_TYPE ?? 'UNREGISTERED_ACTIVITY';
+  const representativeRequired = envBoolean(
+    'LEGAL_OPERATOR_REQUIRES_REPRESENTATIVE',
+    false
+  );
+  const taxClassificationConfirmed = envBoolean(
+    'LEGAL_TAX_CLASSIFICATION_CONFIRMED',
+    false
+  );
+
   const seller = {
     brand: process.env.LEGAL_BRAND_NAME ?? 'DotacjaPRO Bot',
     name: process.env.LEGAL_SELLER_NAME ?? null,
@@ -312,23 +329,53 @@ app.get('/v1/legal/current', async () => {
     nip: process.env.LEGAL_SELLER_NIP ?? null
   };
 
-  const legalIdentityComplete = Boolean(
+  const representative = {
+    name: process.env.LEGAL_REPRESENTATIVE_NAME ?? null,
+    email: process.env.LEGAL_REPRESENTATIVE_EMAIL ?? null
+  };
+
+  const nipRequired =
+    operatorType !== 'UNREGISTERED_ACTIVITY' ||
+    envBoolean('LEGAL_NIP_REQUIRED', false);
+
+  const sellerIdentityComplete = Boolean(
     seller.name &&
     seller.address &&
     seller.email &&
-    seller.nip
+    (!nipRequired || seller.nip)
   );
+
+  const representativeComplete =
+    !representativeRequired || Boolean(representative.name);
+
+  const legalIdentityComplete =
+    sellerIdentityComplete && representativeComplete;
+
+  const checkoutAllowed =
+    legalIdentityComplete && taxClassificationConfirmed;
+
+  let checkoutBlockedReason: string | null = null;
+  if (!sellerIdentityComplete) {
+    checkoutBlockedReason = 'LEGAL_SELLER_IDENTITY_INCOMPLETE';
+  } else if (!representativeComplete) {
+    checkoutBlockedReason = 'LEGAL_REPRESENTATIVE_REQUIRED';
+  } else if (!taxClassificationConfirmed) {
+    checkoutBlockedReason = 'LEGAL_TAX_CLASSIFICATION_UNCONFIRMED';
+  }
 
   return {
     version: LEGAL_VERSION,
     sha256: LEGAL_STATEMENTS_SHA256,
     statements: LEGAL_STATEMENTS,
+    operatorType,
+    representativeRequired,
+    representative,
+    taxClassificationConfirmed,
+    nipRequired,
     seller,
     legalIdentityComplete,
-    checkoutAllowed: legalIdentityComplete,
-    checkoutBlockedReason: legalIdentityComplete
-      ? null
-      : 'LEGAL_SELLER_IDENTITY_INCOMPLETE'
+    checkoutAllowed,
+    checkoutBlockedReason
   };
 });
 
