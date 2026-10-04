@@ -599,7 +599,7 @@ export default function Home() {
           throw new Error('Konto z tym adresem już istnieje. Wybierz logowanie.');
         }
         if (data.error === 'ACCOUNT_REQUIRES_LINKING') {
-          throw new Error('Ten e-mail jest już przypisany do istniejącego konta. Zaloguj się powiązaną metodą i ustaw hasło do logowania web.');
+          throw new Error('Ten e-mail jest już przypisany do istniejącego konta. Zaloguj się przez MT i ustaw hasło do logowania web.');
         }
         if (data.error === 'INVALID_CREDENTIALS') {
           throw new Error('Nieprawidłowy e-mail lub hasło.');
@@ -624,14 +624,14 @@ export default function Home() {
     setError(null);
     try {
       const initData = window.Telegram?.WebApp?.initData;
-      if (!initData) throw new Error('Ta metoda logowania nie jest dostępna w tej przeglądarce.');
+      if (!initData) throw new Error('MT nie jest dostępne w tej przeglądarce.');
 
       const res = await fetch(`${API}/v1/auth/telegram`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ initData })
       });
-      if (!res.ok) throw new Error('Nie udało się zalogować tą metodą.');
+      if (!res.ok) throw new Error('Nie udało się zalogować przez MT.');
 
       const data = await res.json();
       routeAfterAuthentication(data, 'telegram');
@@ -1340,14 +1340,14 @@ export default function Home() {
   return (
     <main className="shell">
       <section className="brand">
-        <span className="eyebrow">DOTACJAPRO</span>
+        <span className="eyebrow">DORADCAPRO</span>
         <h1>Twoja droga do finansowania firmy</h1>
         <p>Ustalimy Twój region i sytuację, dopasujemy programy, a dokumenty przygotujemy wyłącznie na aktualnych, oficjalnych formularzach.</p>
       </section>
 
       {token && (
         <section className="session-toolbar">
-          <span>Zalogowano do DoradcaPRO</span>
+          <span>{authChannel === 'telegram' ? 'Połączono przez MT' : 'Zalogowano do DoradcaPRO'}</span>
           <button className="secondary compact" onClick={logout}>
             Wyloguj
           </button>
@@ -1539,7 +1539,7 @@ export default function Home() {
         </div>
 
         {step === 'welcome' && <>
-          <h2>Zaloguj się do DotacjaPRO</h2>
+          <h2>Zaloguj się do DoradcaPRO</h2>
           <p>
             Konto DoradcaPRO działa w Safari, Chrome i innych nowoczesnych przeglądarkach.
           </p>
@@ -1606,7 +1606,7 @@ export default function Home() {
                   onChange={(e) => setLegalTermsAccepted(e.target.checked)}
                 />
                 <span>
-                  Akceptuję <a href="/legal" target="_blank" rel="noreferrer">Regulamin DotacjaPRO</a>.
+                  Akceptuję <a href="/legal" target="_blank" rel="noreferrer">Regulamin DoradcaPRO</a>.
                 </span>
               </label>
               <label className="legal-check">
@@ -1660,7 +1660,7 @@ export default function Home() {
             <>
               <div className="auth-divider"><span>lub</span></div>
               <button className="secondary" onClick={authenticate} disabled={busy}>
-                Kontynuuj bez hasła
+                Kontynuuj przez MT
               </button>
             </>
           )}
@@ -1687,7 +1687,7 @@ export default function Home() {
                 onChange={(e) => setLegalTermsAccepted(e.target.checked)}
               />
               <span>
-                Akceptuję <a href="/legal" target="_blank" rel="noreferrer">Regulamin DotacjaPRO</a>.
+                Akceptuję <a href="/legal" target="_blank" rel="noreferrer">Regulamin DoradcaPRO</a>.
               </span>
             </label>
             <label className="legal-check">
@@ -1849,7 +1849,7 @@ export default function Home() {
                       <p>{candidate.reason}</p>
                       <p className="call-meta">
                         {candidate.requiresVerifiedCall
-                          ? 'DotacjaPRO pokaże konkretny nabór dopiero po weryfikacji jego oficjalnych zasad.'
+                          ? 'DoradcaPRO pokaże konkretny nabór dopiero po weryfikacji jego oficjalnych zasad.'
                           : 'Warunki tej ścieżki są weryfikowane przed przedstawieniem konkretnej oferty.'}
                       </p>
                       {candidate.program?.officialUrl && (
@@ -2121,7 +2121,7 @@ export default function Home() {
 
                         {officialForms.length === 0 ? (
                           <p className="muted-box">
-                            Nie ma jeszcze zweryfikowanego mapowania formularza dla tego naboru. DotacjaPRO nie utworzy własnego zamiennika.
+                            Nie ma jeszcze zweryfikowanego mapowania formularza dla tego naboru. DoradcaPRO nie utworzy własnego zamiennika.
                           </p>
                         ) : (
                           <div className="forms-list">
@@ -2244,7 +2244,7 @@ export default function Home() {
                                           </p>
                                         )}
                                         {['QUEUED', 'PROCESSING'].includes(renderJob.status) && (
-                                          <p>DotacjaPRO wypełnia kopię aktualnego formularza urzędowego.</p>
+                                          <p>DoradcaPRO wypełnia kopię aktualnego formularza urzędowego.</p>
                                         )}
                                       </div>
                                     )}
@@ -2259,7 +2259,7 @@ export default function Home() {
                       <div className="package-panel">
                         <h3>Gotowy komplet</h3>
                         <p>
-                          DotacjaPRO wyśle ZIP z wymaganymi formularzami, instrukcją do wydruku
+                          DoradcaPRO wyśle ZIP z wymaganymi formularzami, instrukcją do wydruku
                           i manifestem wersji dokumentów na Twój zweryfikowany e-mail.
                         </p>
                         <button
