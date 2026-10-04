@@ -759,7 +759,7 @@ app.get('/v1/regions/search', async (request, reply) => {
 
 
 const locationSearchSchema = z.object({
-  voivodeship: z.enum(VOIVODESHIPS),
+  voivodeship: z.enum(VOIVODESHIPS).optional(),
   q: z.string().trim().min(2).max(120)
 });
 
@@ -773,7 +773,9 @@ app.get('/v1/locations/search', async (request, reply) => {
     where: {
       name: { contains: parsed.data.q, mode: 'insensitive' },
       municipality: {
-        voivodeship: parsed.data.voivodeship,
+        ...(parsed.data.voivodeship
+          ? { voivodeship: parsed.data.voivodeship }
+          : {}),
         OR: [
           { validTo: null },
           { validTo: { gte: new Date() } }
