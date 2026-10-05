@@ -111,3 +111,69 @@ button:disabled { opacity: .45; cursor: default; }
 .legal-check input[type="checkbox"] { width: 18px; height: 18px; margin: 2px 0 0; accent-color: var(--accent); }
 .legal-check a { color: var(--accent); font-weight: 750; text-decoration: none; }
 .legal-consents small { color: var(--muted); line-height: 1.45; }
+
+
+/* User support reporting */
+.support-fab {
+  position: fixed;
+  right: 18px;
+  bottom: calc(18px + env(safe-area-inset-bottom));
+  z-index: 70;
+  width: auto;
+  min-height: 46px;
+  padding: 0 18px;
+  border-radius: 999px;
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.28);
+}
+
+.support-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+  padding: 18px 14px calc(18px + env(safe-area-inset-bottom));
+  background: rgba(3, 8, 18, 0.76);
+  backdrop-filter: blur(8px);
+}
+
+.support-dialog {
+  width: min(100%, 560px);
+  max-height: min(82vh, 720px);
+  overflow: auto;
+  border: 1px solid rgba(113, 171, 255, 0.24);
+  border-radius: 24px;
+  padding: 22px;
+  background: #08111f;
+  box-shadow: 0 24px 70px rgba(0, 0, 0, 0.5);
+}
+
+.support-dialog-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 14px;
+}
+
+.support-dialog-head h2 {
+  margin: 4px 0 0;
+}
+
+.support-dialog label {
+  display: grid;
+  gap: 8px;
+  margin-top: 14px;
+}
+
+.support-dialog select,
+.support-dialog textarea {
+  width: 100%;
+}
+
+@media (min-width: 720px) {
+  .support-overlay {
+    align-items: center;
+  }
+}
