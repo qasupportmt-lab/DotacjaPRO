@@ -1,9 +1,9 @@
 # DoradcaPRO Instagram Growth & Control System
 
 ## Cel
-Zbudować dwukanałowy system marketingowy dla DoradcaPRO:
-- konto PL — rynek polski,
-- konto EN — rynek międzynarodowy / anglojęzyczny,
+Zbudować dwukanałowy system marketingowy dla DoradcaPRO wyłącznie na rynek polski:
+- Instagram DoradcaPRO PL,
+- TikTok DoradcaPRO PL,
 sterowany z prywatnego panelu właściciela w Telegramie.
 
 ## Założenia zgodności
@@ -114,13 +114,9 @@ Główne segmenty:
 - osoby porównujące dostępne ścieżki finansowania,
 - użytkownicy potrzebujący pomocy z formularzami i dokumentami.
 
-### Konto EN
-Nie kierować szeroko do całego świata, dopóki produkt pozostaje skoncentrowany na polskich programach.
-Rynek:
-- foreigners / expats planning a business in Poland,
-- English-speaking residents of Poland,
-- returning diaspora,
-- people looking for Polish startup grants and official funding procedures in English.
+### TikTok PL
+Rynek: wyłącznie Polska.
+Treści, trendy, CTA i pomiar konwersji są lokalizowane pod polskich odbiorców. Nie utrzymujemy osobnego anglojęzycznego konta w tym modelu.
 
 ### Oficjalnie wspierana automatyzacja Meta
 - publikacja postów, video, karuzel i Reels,
