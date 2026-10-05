@@ -363,6 +363,58 @@ export async function registerCommerceRoutes(
     });
   });
 
+  app.get('/v1/admin/commerce/access', async (request) => {
+    await deps.requireAdminUserId(request);
+
+    const users = await prisma.user.findMany({
+      where: {
+        OR: [
+          { entitlements: { some: { status: 'ACTIVE' } } },
+          { cases: { some: { documents: { some: {} } } } },
+          { cases: { some: { packageJobs: { some: { status: 'COMPLETED' } } } } }
+        ]
+      },
+      orderBy: { createdAt: 'desc' },
+      select: {
+        id: true,
+        email: true,
+        telegramUsername: true,
+        entitlements: {
+          where: { status: 'ACTIVE' },
+          select: {
+            product: { select: { code: true, name: true } }
+          }
+        },
+        cases: {
+          select: {
+            documents: { select: { id: true } },
+            packageJobs: {
+              where: { status: 'COMPLETED' },
+              select: { id: true }
+            }
+          }
+        }
+      }
+    });
+
+    return {
+      users: users.map((user) => ({
+        id: user.id,
+        email: user.email,
+        telegramUsername: user.telegramUsername,
+        packages: user.entitlements.map((item) => item.product),
+        documentCount: user.cases.reduce(
+          (total, item) => total + item.documents.length,
+          0
+        ),
+        completedPackageCount: user.cases.reduce(
+          (total, item) => total + item.packageJobs.length,
+          0
+        )
+      }))
+    };
+  });
+
   app.get('/v1/admin/commerce/products', async (request) => {
     await deps.requireAdminUserId(request);
     const products = await prisma.commerceProduct.findMany({
