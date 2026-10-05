@@ -377,8 +377,6 @@ export async function registerCommerceRoutes(
       orderBy: { createdAt: 'desc' },
       select: {
         id: true,
-        email: true,
-        telegramUsername: true,
         entitlements: {
           where: { status: 'ACTIVE' },
           select: {
@@ -399,9 +397,7 @@ export async function registerCommerceRoutes(
 
     return {
       users: users.map((user) => ({
-        id: user.id,
-        email: user.email,
-        telegramUsername: user.telegramUsername,
+        userRef: user.id.slice(-8),
         packages: user.entitlements.map((item) => item.product),
         documentCount: user.cases.reduce(
           (total, item) => total + item.documents.length,
