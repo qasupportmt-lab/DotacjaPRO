@@ -310,6 +310,139 @@ app.get('/v1/system/policy', async () => ({
   source_verification_required: true
 }));
 
+
+const supportIssueSchema = z.object({
+  channel: z.enum(['WEB', 'MINIAPP', 'TELEGRAM']),
+  category: z.enum([
+    'TECHNICAL',
+    'LOGIN',
+    'PAYMENT',
+    'DOCUMENTS',
+    'DATA',
+    'OTHER'
+  ]).default('TECHNICAL'),
+  message: z.string().trim().min(5).max(4000),
+  path: z.string().trim().max(500).optional(),
+  userAgent: z.string().trim().max(1000).optional()
+});
+
+const internalSupportIssueSchema = supportIssueSchema.extend({
+  telegramUserId: z.string().regex(/^\d+$/),
+  telegramUsername: z.string().trim().min(1).max(64).optional(),
+  telegramFirstName: z.string().trim().min(1).max(128).optional()
+});
+
+const supportIssueRate = new Map<string, { count: number; resetAt: number }>();
+
+function supportIssueRateAllowed(key: string) {
+  const now = Date.now();
+  const current = supportIssueRate.get(key);
+  if (!current || current.resetAt <= now) {
+    supportIssueRate.set(key, { count: 1, resetAt: now + 10 * 60_000 });
+    return true;
+  }
+  if (current.count >= 5) return false;
+  current.count += 1;
+  return true;
+}
+
+async function optionalUserId(request: FastifyRequest) {
+  const auth = request.headers.authorization;
+  if (!auth?.startsWith('Bearer ')) return null;
+  const { userId } = await verifySessionToken(auth.slice(7));
+  return userId;
+}
+
+app.post('/v1/support/issues', async (request, reply) => {
+  if (!supportIssueRateAllowed(request.ip || 'unknown')) {
+    return reply.code(429).send({ error: 'TOO_MANY_SUPPORT_REPORTS' });
+  }
+
+  const parsed = supportIssueSchema.safeParse(request.body);
+  if (!parsed.success) {
+    return reply.code(400).send({
+      error: 'INVALID_SUPPORT_ISSUE',
+      details: parsed.error.flatten()
+    });
+  }
+
+  let userId: string | null = null;
+  try {
+    userId = await optionalUserId(request);
+  } catch {
+    return reply.code(401).send({ error: 'INVALID_SESSION' });
+  }
+
+  const event = await prisma.auditEvent.create({
+    data: {
+      userId,
+      actorType: userId ? 'USER' : 'ANONYMOUS',
+      action: 'SUPPORT_ISSUE_REPORTED',
+      entity: 'SUPPORT_ISSUE',
+      metadata: {
+        status: 'OPEN',
+        channel: parsed.data.channel,
+        category: parsed.data.category,
+        message: parsed.data.message,
+        path: parsed.data.path ?? null,
+        userAgent:
+          parsed.data.userAgent ??
+          String(request.headers['user-agent'] ?? '').slice(0, 1000) ||
+          null
+      }
+    },
+    select: { id: true, createdAt: true }
+  });
+
+  return reply.code(201).send({
+    status: 'RECEIVED',
+    reportId: event.id,
+    createdAt: event.createdAt
+  });
+});
+
+app.post('/v1/internal/support/issues', async (request, reply) => {
+  requireWorkerSecret(request);
+
+  const parsed = internalSupportIssueSchema.safeParse(request.body);
+  if (!parsed.success) {
+    return reply.code(400).send({
+      error: 'INVALID_SUPPORT_ISSUE',
+      details: parsed.error.flatten()
+    });
+  }
+
+  const user = await prisma.user.findUnique({
+    where: { telegramUserId: parsed.data.telegramUserId },
+    select: { id: true }
+  });
+
+  const event = await prisma.auditEvent.create({
+    data: {
+      userId: user?.id ?? null,
+      actorType: 'TELEGRAM_USER',
+      action: 'SUPPORT_ISSUE_REPORTED',
+      entity: 'SUPPORT_ISSUE',
+      metadata: {
+        status: 'OPEN',
+        channel: 'TELEGRAM',
+        category: parsed.data.category,
+        message: parsed.data.message,
+        telegramUserId: parsed.data.telegramUserId,
+        telegramUsername: parsed.data.telegramUsername ?? null,
+        telegramFirstName: parsed.data.telegramFirstName ?? null
+      }
+    },
+    select: { id: true, createdAt: true }
+  });
+
+  return reply.code(201).send({
+    status: 'RECEIVED',
+    reportId: event.id,
+    createdAt: event.createdAt
+  });
+});
+
 app.get('/v1/legal/current', async () => ({
   version: LEGAL_VERSION,
   sha256: LEGAL_STATEMENTS_SHA256,
