@@ -387,8 +387,7 @@ app.post('/v1/support/issues', async (request, reply) => {
         path: parsed.data.path ?? null,
         userAgent:
           parsed.data.userAgent ??
-          String(request.headers['user-agent'] ?? '').slice(0, 1000) ||
-          null
+          (String(request.headers['user-agent'] ?? '').slice(0, 1000) || null)
       }
     },
     select: { id: true, createdAt: true }
