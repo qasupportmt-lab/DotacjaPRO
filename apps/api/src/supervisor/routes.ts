@@ -50,7 +50,7 @@ export async function registerSupervisorRoutes(app: FastifyInstance, deps: Deps)
       prisma.entitlement.count({ where: { status: 'ACTIVE' } }),
       prisma.caseDocument.count(),
       prisma.documentPackageJob.count({ where: { status: 'COMPLETED' } }),
-      prisma.auditEvent.count({ where: { createdAt: { gte: since24h } } })
+      prisma.auditEvent.count({ where: { action: 'APP_ACTIVITY', createdAt: { gte: since24h } } })
     ]);
     const stats = new Map<string, { code: string; name: string; purchases: number; netGrosz: number }>();
     for (const payment of payments7d) {
