@@ -31,6 +31,26 @@ function supportCategoryMenu() {
     .text('Anuluj', 'support:CANCEL');
 }
 
+async function recordAppActivity(action: string) {
+  if (!workerSecret) return;
+  try {
+    await fetch(
+      apiBaseUrl.replace(/\/$/, '') + '/v1/internal/supervisor/activity-event',
+      {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-worker-secret': workerSecret
+        },
+        body: JSON.stringify({ action }),
+        signal: AbortSignal.timeout(5000)
+      }
+    );
+  } catch (error) {
+    console.error('Activity event failed', error);
+  }
+}
+
 async function createTelegramSupportIssue(
   ctx: any,
   category: string,
@@ -86,11 +106,12 @@ function mainMenu(isAdmin = false) {
     .text('Pakiety i materiały', 'menu:pakiety')
     .text('Pomoc', 'menu:pomoc').row()
     .text('Zgłoś problem', 'menu:problem');
-  if (isAdmin) keyboard.row().text('Panel właściciela', 'menu:admin');
+  if (isAdmin) keyboard.row().text('Panel właściciela', 'menu:admin').text('Dostępy', 'menu:dostepy');
   return keyboard;
 }
 
 bot.command('start', async (ctx) => {
+  void recordAppActivity('telegram:start');
   await ctx.reply(
     '<b>DoradcaPRO</b>\n\nWybierz, co chcesz zrobić. DoradcaPRO prowadzi Cię przez finansowanie, sprawę i dokumenty z jednego menu.',
     { parse_mode: 'HTML', reply_markup: mainMenu(isAdminTelegram(ctx.from?.id)) }
@@ -110,21 +131,25 @@ bot.callbackQuery('menu:home', async (ctx) => {
 });
 
 bot.callbackQuery('menu:dotacje', async (ctx) => {
+  void recordAppActivity('telegram:menu:dotacje');
   await ctx.answerCallbackQuery();
   await ctx.editMessageText('<b>Sprawdź dotacje</b>\n\nDoradcaPRO dopasuje dostępne finansowanie do Twojej sytuacji i regionu.', { parse_mode: 'HTML', reply_markup: new InlineKeyboard().webApp('Uruchom DoradcęPRO', appBaseUrl).row().text('Wróć', 'menu:home') });
 });
 
 bot.callbackQuery('menu:sprawa', async (ctx) => {
+  void recordAppActivity('telegram:menu:sprawa');
   await ctx.answerCallbackQuery();
   await ctx.editMessageText('<b>Moja sprawa</b>\n\nOtwórz konto DoradcaPRO, aby zobaczyć swoją sprawę i jej aktualny etap.', { parse_mode: 'HTML', reply_markup: new InlineKeyboard().webApp('Otwórz moją sprawę', appBaseUrl).row().text('Wróć', 'menu:home') });
 });
 
 bot.callbackQuery('menu:dokumenty', async (ctx) => {
+  void recordAppActivity('telegram:menu:dokumenty');
   await ctx.answerCallbackQuery();
   await ctx.editMessageText('<b>Formularze i dokumenty</b>\n\nDokumenty i formularze są dostępne na Twoim koncie DoradcaPRO.', { parse_mode: 'HTML', reply_markup: new InlineKeyboard().webApp('Otwórz dokumenty', appBaseUrl).row().text('Wróć', 'menu:home') });
 });
 
 bot.callbackQuery('menu:pakiety', async (ctx) => {
+  void recordAppActivity('telegram:menu:pakiety');
   await ctx.answerCallbackQuery();
   await ctx.editMessageText('<b>Pakiety i materiały</b>\n\nZobacz dostępne pakiety, materiały i przypisane zakupy.', { parse_mode: 'HTML', reply_markup: new InlineKeyboard().webApp('Zobacz pakiety', appBaseUrl).row().text('Wróć', 'menu:home') });
 });
@@ -134,10 +159,45 @@ bot.callbackQuery('menu:pomoc', async (ctx) => {
   await ctx.editMessageText('<b>Pomoc DoradcaPRO</b>\n\nWybierz funkcję z menu lub otwórz aplikację. Polecenie /help pokazuje także dostępne komendy.', { parse_mode: 'HTML', reply_markup: new InlineKeyboard().webApp('Otwórz DoradcęPRO', appBaseUrl).row().text('Wróć', 'menu:home') });
 });
 
+bot.callbackQuery('menu:dostepy', async (ctx) => {
+  await ctx.answerCallbackQuery();
+  if (!isAdminTelegram(ctx.from?.id)) return;
+
+  void recordAppActivity('owner:access-audit');
+  await ctx.editMessageText(
+    '<b>DoradcaPRO — dostępy użytkowników</b>\n\nOtwórz prywatny audyt dostępów. Panel pokaże pseudonimowy identyfikator użytkownika, aktywne pakiety, liczbę dokumentów i gotowych paczek.',
+    {
+      parse_mode: 'HTML',
+      reply_markup: new InlineKeyboard()
+        .webApp('Otwórz audyt dostępów', appBaseUrl + '?admin=access')
+        .row()
+        .text('Wróć', 'menu:home')
+    }
+  );
+});
+
+bot.command('dostepy', async (ctx) => {
+  if (!isAdminTelegram(ctx.from?.id)) {
+    return ctx.reply('Ta funkcja jest dostępna tylko dla administratora DoradcaPRO.');
+  }
+
+  void recordAppActivity('owner:access-audit');
+  await ctx.reply(
+    '<b>DoradcaPRO — dostępy użytkowników</b>\n\nPanel nie wymaga hasła, gdy otwierasz go z Telegrama jako właściciel.',
+    {
+      parse_mode: 'HTML',
+      reply_markup: new InlineKeyboard().webApp(
+        'Otwórz audyt dostępów',
+        appBaseUrl + '?admin=access'
+      )
+    }
+  );
+});
+
 bot.callbackQuery('menu:admin', async (ctx) => {
   await ctx.answerCallbackQuery();
   if (!isAdminTelegram(ctx.from?.id)) return;
-  await ctx.editMessageText('<b>DoradcaPRO — panel właściciela</b>\n\nDostępne polecenia: /supervisor, /status, /ksiegowa.', { parse_mode: 'HTML', reply_markup: new InlineKeyboard().text('Wróć', 'menu:home') });
+  await ctx.editMessageText('<b>DoradcaPRO — panel właściciela</b>\n\nDostępne polecenia: /supervisor, /dostepy, /status, /ksiegowa.', { parse_mode: 'HTML', reply_markup: new InlineKeyboard().webApp('Audyt dostępów', appBaseUrl + '?admin=access').row().text('Wróć', 'menu:home') });
 });
 
 bot.command('whoami', async (ctx) => {
@@ -254,7 +314,13 @@ bot.command('supervisor', async (ctx) => {
       `Najczęściej kupowane: ${top ? top.name + ' (' + top.purchases + ')' : 'brak sprzedaży'}`,
       `Produkty bez sprzedaży: ${data.commerce.noSales?.length ?? 0}`,
       '',
+      '<b>Dostępy</b>',
+      `Aktywne uprawnienia: ${data.access?.activeEntitlementsTotal ?? 0}`,
+      `Dokumenty: ${data.access?.documentsTotal ?? 0}`,
+      `Gotowe paczki: ${data.access?.completedPackagesTotal ?? 0}`,
+      '',
       '<b>Operacje</b>',
+      `Zdarzenia audytowe 24h: ${data.operations.auditEvents24h ?? 0}`,
       `Oczekujące powiadomienia: ${data.operations.pendingNotifications}`,
       `Błędy powiadomień: ${data.operations.failedNotifications}`,
       `Błędy dokumentów/paczek 7d: ${data.operations.renderFailures7d}/${data.operations.packageFailures7d}`,
@@ -378,7 +444,7 @@ bot.command('help', async (ctx) => {
       '/whoami — pokaż Twój Telegram ID',
       '/ksiegowa — sprzedaż, limit i podgląd PIT-36',
       '/problem — zgłoś problem z aplikacją lub obsługą',
-      ...(isAdminTelegram(ctx.from?.id) ? ['/supervisor — prywatny panel nadzorczy', '/status — stan bota, API i webhooka'] : []),
+      ...(isAdminTelegram(ctx.from?.id) ? ['/supervisor — prywatny panel nadzorczy', '/dostepy — audyt pakietów i dokumentów', '/status — stan bota, API i webhooka'] : []),
       '/help — lista poleceń'
     ].join('\n'),
     { parse_mode: 'HTML', reply_markup: keyboard }
