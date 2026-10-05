@@ -475,6 +475,14 @@ export default function Home() {
     setIsAdmin(Boolean(data.user?.isAdmin));
     setAuthChannel(channel);
 
+    if (
+      Boolean(data.user?.isAdmin) &&
+      new URLSearchParams(window.location.search).get('admin') === 'access'
+    ) {
+      setAdminMode(true);
+      void refreshAdminPanel(data.token);
+    }
+
     if (data.legalAcceptanceRequired) {
       resetLegalChecks();
       if (data.legalVersion) setLegalVersion(data.legalVersion);
@@ -561,6 +569,13 @@ export default function Home() {
       setToken(sessionToken);
       setIsAdmin(Boolean(data.user?.isAdmin));
       setEmail(data.user?.email ?? '');
+      if (
+        Boolean(data.user?.isAdmin) &&
+        new URLSearchParams(window.location.search).get('admin') === 'access'
+      ) {
+        setAdminMode(true);
+        void refreshAdminPanel(sessionToken);
+      }
       setAuthChannel(data.user?.authMethods?.telegram && window.Telegram?.WebApp?.initData
         ? 'telegram'
         : 'web');
