@@ -236,6 +236,12 @@ export default function Home() {
   const [adminQueue, setAdminQueue] = useState<AdminReviewQueue | null>(null);
   const [adminAccounting, setAdminAccounting] = useState<AdminAccountingSummary | null>(null);
   const [adminMessage, setAdminMessage] = useState<string | null>(null);
+  const [supportOpen, setSupportOpen] = useState(false);
+  const [supportCategory, setSupportCategory] = useState('TECHNICAL');
+  const [supportMessage, setSupportMessage] = useState('');
+  const [supportBusy, setSupportBusy] = useState(false);
+  const [supportReportId, setSupportReportId] = useState<string | null>(null);
+  const [supportError, setSupportError] = useState<string | null>(null);
 
   const authHeaders = useMemo(
     () => token ? { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' } : undefined,
@@ -1326,6 +1332,54 @@ export default function Home() {
     }
   }
 
+  async function submitSupportIssue() {
+    const message = supportMessage.trim();
+    if (message.length < 5) {
+      setSupportError('Opisz problem w co najmniej kilku słowach.');
+      return;
+    }
+
+    setSupportBusy(true);
+    setSupportError(null);
+    setSupportReportId(null);
+
+    try {
+      const response = await fetch(`${API}/v1/support/issues`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          ...(token ? { Authorization: `Bearer ${token}` } : {})
+        },
+        body: JSON.stringify({
+          channel: telegramAvailable ? 'MINIAPP' : 'WEB',
+          category: supportCategory,
+          message,
+          path: window.location.pathname + window.location.search,
+          userAgent: window.navigator.userAgent
+        })
+      });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        throw new Error(
+          data.error === 'TOO_MANY_SUPPORT_REPORTS'
+            ? 'Wysłano zbyt wiele zgłoszeń. Spróbuj ponownie za kilka minut.'
+            : 'Nie udało się wysłać zgłoszenia.'
+        );
+      }
+
+      setSupportReportId(String(data.reportId ?? ''));
+      setSupportMessage('');
+    } catch (issueError) {
+      setSupportError(
+        issueError instanceof Error
+          ? issueError.message
+          : 'Nie udało się wysłać zgłoszenia.'
+      );
+    } finally {
+      setSupportBusy(false);
+    }
+  }
+
   const progressed: Record<Step, number> = {
     welcome: 0,
     legal: 0,
@@ -2300,6 +2354,84 @@ export default function Home() {
 
         {error && <p className="error">{error}</p>}
       </section>
+
+      <button
+        type="button"
+        className="support-fab"
+        onClick={() => {
+          setSupportOpen(true);
+          setSupportError(null);
+        }}
+        aria-label="Zgłoś problem"
+      >
+        Zgłoś problem
+      </button>
+
+      {supportOpen && (
+        <div
+          className="support-overlay"
+          role="presentation"
+          onMouseDown={(event) => {
+            if (event.target === event.currentTarget) setSupportOpen(false);
+          }}
+        >
+          <section className="support-dialog" role="dialog" aria-modal="true" aria-labelledby="support-title">
+            <div className="support-dialog-head">
+              <div>
+                <span className="eyebrow">POMOC</span>
+                <h2 id="support-title">Zgłoś problem</h2>
+              </div>
+              <button
+                type="button"
+                className="secondary compact"
+                onClick={() => setSupportOpen(false)}
+                aria-label="Zamknij zgłoszenie"
+              >
+                Zamknij
+              </button>
+            </div>
+
+            <p>
+              Napisz, co nie działa. Zgłoszenie zapisujemy razem z kanałem i miejscem w aplikacji,
+              aby szybciej odtworzyć problem.
+            </p>
+
+            <label>
+              Rodzaj problemu
+              <select value={supportCategory} onChange={(event) => setSupportCategory(event.target.value)}>
+                <option value="TECHNICAL">Problem techniczny</option>
+                <option value="LOGIN">Logowanie lub konto</option>
+                <option value="PAYMENT">Płatność lub zakup</option>
+                <option value="DOCUMENTS">Dokumenty lub formularze</option>
+                <option value="DATA">Nieprawidłowe dane / dotacja</option>
+                <option value="OTHER">Inny problem</option>
+              </select>
+            </label>
+
+            <label>
+              Opis problemu
+              <textarea
+                rows={5}
+                value={supportMessage}
+                onChange={(event) => setSupportMessage(event.target.value)}
+                placeholder="Co robiłeś, co się stało i czego oczekiwałeś?"
+                maxLength={4000}
+              />
+            </label>
+
+            <button type="button" onClick={submitSupportIssue} disabled={supportBusy || supportMessage.trim().length < 5}>
+              {supportBusy ? 'Wysyłanie…' : 'Wyślij zgłoszenie'}
+            </button>
+
+            {supportReportId && (
+              <p className="verified">
+                ✓ Zgłoszenie przyjęte. Numer: <strong>{supportReportId}</strong>
+              </p>
+            )}
+            {supportError && <p className="error">{supportError}</p>}
+          </section>
+        </div>
+      )}
     </main>
   );
 }
