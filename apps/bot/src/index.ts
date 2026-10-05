@@ -18,6 +18,65 @@ function isAdminTelegram(userId: number | undefined) {
 
 const bot = new Bot(token);
 
+const supportDrafts = new Map<number, string>();
+
+function supportCategoryMenu() {
+  return new InlineKeyboard()
+    .text('Techniczny', 'support:TECHNICAL')
+    .text('Logowanie / konto', 'support:LOGIN').row()
+    .text('Płatność / zakup', 'support:PAYMENT')
+    .text('Dokumenty', 'support:DOCUMENTS').row()
+    .text('Dane / dotacja', 'support:DATA')
+    .text('Inny', 'support:OTHER').row()
+    .text('Anuluj', 'support:CANCEL');
+}
+
+async function createTelegramSupportIssue(
+  ctx: any,
+  category: string,
+  message: string
+) {
+  if (!workerSecret) {
+    throw new Error('INTERNAL_WORKER_SECRET_NOT_CONFIGURED');
+  }
+
+  const telegramUserId = String(ctx.from?.id ?? '');
+  if (!telegramUserId) {
+    throw new Error('TELEGRAM_USER_ID_MISSING');
+  }
+
+  const response = await fetch(
+    apiBaseUrl.replace(/\/$/, '') + '/v1/internal/support/issues',
+    {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-worker-secret': workerSecret
+      },
+      body: JSON.stringify({
+        channel: 'TELEGRAM',
+        category,
+        message,
+        telegramUserId,
+        telegramUsername: ctx.from?.username,
+        telegramFirstName: ctx.from?.first_name
+      }),
+      signal: AbortSignal.timeout(10_000)
+    }
+  );
+
+  const data = await response.json().catch(() => ({})) as {
+    reportId?: string;
+    error?: string;
+  };
+
+  if (!response.ok || !data.reportId) {
+    throw new Error(data.error ?? ('Support issue HTTP ' + response.status));
+  }
+
+  return data.reportId;
+}
+
 function mainMenu(isAdmin = false) {
   const keyboard = new InlineKeyboard()
     .webApp('DoradcaPRO — otwórz aplikację', appBaseUrl).row()
@@ -25,7 +84,8 @@ function mainMenu(isAdmin = false) {
     .text('Moja sprawa', 'menu:sprawa').row()
     .text('Formularze i dokumenty', 'menu:dokumenty').row()
     .text('Pakiety i materiały', 'menu:pakiety')
-    .text('Pomoc', 'menu:pomoc');
+    .text('Pomoc', 'menu:pomoc').row()
+    .text('Zgłoś problem', 'menu:problem');
   if (isAdmin) keyboard.row().text('Panel właściciela', 'menu:admin');
   return keyboard;
 }
@@ -229,6 +289,85 @@ bot.command('status', async (ctx) => {
   }
 });
 
+bot.command('problem', async (ctx) => {
+  await ctx.reply(
+    '<b>Zgłoś problem</b>\n\nWybierz kategorię. Następnie wyślij jedną wiadomość z opisem tego, co nie działa.',
+    { parse_mode: 'HTML', reply_markup: supportCategoryMenu() }
+  );
+});
+
+bot.callbackQuery('menu:problem', async (ctx) => {
+  await ctx.answerCallbackQuery();
+  await ctx.editMessageText(
+    '<b>Zgłoś problem</b>\n\nWybierz kategorię. Następnie wyślij jedną wiadomość z opisem tego, co nie działa.',
+    { parse_mode: 'HTML', reply_markup: supportCategoryMenu() }
+  );
+});
+
+bot.callbackQuery(/^support:(TECHNICAL|LOGIN|PAYMENT|DOCUMENTS|DATA|OTHER|CANCEL)$/, async (ctx) => {
+  await ctx.answerCallbackQuery();
+  const userId = ctx.from?.id;
+  if (!userId) return;
+
+  const category = ctx.match?.[1];
+  if (!category || category === 'CANCEL') {
+    supportDrafts.delete(userId);
+    await ctx.editMessageText(
+      '<b>Zgłoszenie anulowane.</b>',
+      { parse_mode: 'HTML', reply_markup: mainMenu(isAdminTelegram(userId)) }
+    );
+    return;
+  }
+
+  supportDrafts.set(userId, category);
+  await ctx.editMessageText(
+    '<b>Opisz problem</b>\n\nWyślij teraz jedną wiadomość: co robiłeś, co się stało i czego oczekiwałeś. Maksymalnie 4000 znaków.\n\nAby anulować: /anuluj',
+    { parse_mode: 'HTML' }
+  );
+});
+
+bot.command('anuluj', async (ctx) => {
+  if (ctx.from?.id) supportDrafts.delete(ctx.from.id);
+  await ctx.reply('Zgłoszenie anulowane.', {
+    reply_markup: mainMenu(isAdminTelegram(ctx.from?.id))
+  });
+});
+
+bot.on('message:text', async (ctx) => {
+  const userId = ctx.from?.id;
+  if (!userId) return;
+
+  const category = supportDrafts.get(userId);
+  if (!category) return;
+
+  const message = ctx.message.text.trim();
+  if (message.startsWith('/')) return;
+
+  if (message.length < 5) {
+    await ctx.reply('Opis jest za krótki. Napisz przynajmniej kilka słów.');
+    return;
+  }
+  if (message.length > 4000) {
+    await ctx.reply('Opis jest za długi. Skróć go do maksymalnie 4000 znaków.');
+    return;
+  }
+
+  try {
+    const reportId = await createTelegramSupportIssue(ctx, category, message);
+    supportDrafts.delete(userId);
+    await ctx.reply(
+      '<b>Zgłoszenie przyjęte.</b>\nNumer: <code>' + escapeHtml(reportId) + '</code>\n\nDziękuję. Problem został zapisany do weryfikacji.',
+      {
+        parse_mode: 'HTML',
+        reply_markup: mainMenu(isAdminTelegram(userId))
+      }
+    );
+  } catch (error) {
+    console.error('Telegram support issue failed', error);
+    await ctx.reply('Nie udało się zapisać zgłoszenia. Spróbuj ponownie za chwilę.');
+  }
+});
+
 bot.command('help', async (ctx) => {
   const keyboard = new InlineKeyboard().webApp('Otwórz DotacjaPRO', appBaseUrl);
   await ctx.reply(
@@ -238,6 +377,7 @@ bot.command('help', async (ctx) => {
       '/dotacje — sprawdź dostępne finansowanie',
       '/whoami — pokaż Twój Telegram ID',
       '/ksiegowa — sprzedaż, limit i podgląd PIT-36',
+      '/problem — zgłoś problem z aplikacją lub obsługą',
       ...(isAdminTelegram(ctx.from?.id) ? ['/supervisor — prywatny panel nadzorczy', '/status — stan bota, API i webhooka'] : []),
       '/help — lista poleceń'
     ].join('\n'),
