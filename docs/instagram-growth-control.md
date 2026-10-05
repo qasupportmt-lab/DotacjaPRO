@@ -102,3 +102,67 @@ P2 — comments, messaging, moderation.
 P3 — insights + daily strategy engine.
 P4 — experimentation + attribution.
 P5 — controlled engagement actions supported by current official Meta API.
+
+
+## Zweryfikowana korekta strategii — 2026-10-05
+
+### Konto PL
+Rynek: Polska.
+Główne segmenty:
+- osoby bezrobotne planujące JDG,
+- osoby szukające PUP / Funduszu Pracy / Funduszy Europejskich,
+- osoby porównujące dostępne ścieżki finansowania,
+- użytkownicy potrzebujący pomocy z formularzami i dokumentami.
+
+### Konto EN
+Nie kierować szeroko do całego świata, dopóki produkt pozostaje skoncentrowany na polskich programach.
+Rynek:
+- foreigners / expats planning a business in Poland,
+- English-speaking residents of Poland,
+- returning diaspora,
+- people looking for Polish startup grants and official funding procedures in English.
+
+### Oficjalnie wspierana automatyzacja Meta
+- publikacja postów, video, karuzel i Reels,
+- Stories tylko tam, gdzie wspiera je aktualny typ konta/API,
+- pobieranie insights,
+- odczyt i moderacja komentarzy,
+- publiczne odpowiedzi na komentarze,
+- private reply do autora komentarza w dozwolonym oknie,
+- obsługa DM po rozpoczęciu interakcji przez użytkownika,
+- webhooki komentarzy i wiadomości.
+
+### Czego system nie robi
+- nie identyfikuje anonimowych odwiedzających profil,
+- nie wysyła masowych DM do osób, które tylko odwiedziły profil,
+- nie wykonuje automatycznego follow/unfollow,
+- nie wykonuje masowego automatycznego lajkowania,
+- nie stosuje fake engagement.
+
+### Funnel rekomendowany
+REEL/POST
+-> CTA: skomentuj HASŁO / wyślij DM
+-> webhook
+-> publiczna odpowiedź + opcjonalny private reply
+-> link z UTM do DoradcaPRO
+-> rejestracja
+-> kwalifikacja
+-> pomiar konwersji.
+
+### Roczny model pracy
+Q1: walidacja problem-market-content fit i podstawowego funnelu.
+Q2: skalowanie zwycięskich serii i SEO/social search.
+Q3: autorytet, case studies, partnerstwa i evergreen library.
+Q4: konwersja, retargeting, sezonowość i optymalizacja całego lejka.
+
+### Minimalna kadencja początkowa na konto
+- 4 Reels / tydzień,
+- 2 karuzele / tydzień,
+- 3-5 Stories / dzień,
+- 1 post dowodowy/case-study / tydzień,
+- codzienna obsługa komentarzy i kwalifikowanych DM,
+- codzienny raport strategii,
+- tygodniowy eksperyment A/B,
+- miesięczny review KEEP / SCALE / MODIFY / STOP.
+
+Kadencja jest adaptacyjna: strategia nie zwiększa częstotliwości, jeśli jakość, retention lub konwersja spadają.
