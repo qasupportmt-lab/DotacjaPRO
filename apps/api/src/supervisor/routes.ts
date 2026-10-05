@@ -9,7 +9,7 @@ export async function registerSupervisorRoutes(app: FastifyInstance, deps: Deps)
     const now = new Date();
     const since24h = new Date(now.getTime() - 86400000);
     const since7d = new Date(now.getTime() - 7 * 86400000);
-    const [usersTotal, users24h, casesTotal, cases7d, orders7d, payments7d, failedPayments7d, pendingNotifications, failedNotifications, openChanges, renderFailures, packageFailures, products] = await Promise.all([
+    const [usersTotal, users24h, casesTotal, cases7d, orders7d, payments7d, failedPayments7d, pendingNotifications, failedNotifications, openChanges, renderFailures, packageFailures, products, activeEntitlementsTotal, documentsTotal, completedPackagesTotal, auditEvents24h] = await Promise.all([
       prisma.user.count(),
       prisma.user.count({ where: { createdAt: { gte: since24h } } }),
       prisma.case.count(),
@@ -22,7 +22,11 @@ export async function registerSupervisorRoutes(app: FastifyInstance, deps: Deps)
       prisma.changeEvent.count({ where: { verified: false } }),
       prisma.documentRenderJob.count({ where: { status: 'FAILED', requestedAt: { gte: since7d } } }),
       prisma.documentPackageJob.count({ where: { status: 'FAILED', requestedAt: { gte: since7d } } }),
-      prisma.commerceProduct.findMany({ select: { code: true, name: true, active: true } })
+      prisma.commerceProduct.findMany({ select: { code: true, name: true, active: true } }),
+      prisma.entitlement.count({ where: { status: 'ACTIVE' } }),
+      prisma.caseDocument.count(),
+      prisma.documentPackageJob.count({ where: { status: 'COMPLETED' } }),
+      prisma.auditEvent.count({ where: { createdAt: { gte: since24h } } })
     ]);
     const stats = new Map<string, { code: string; name: string; purchases: number; netGrosz: number }>();
     for (const payment of payments7d) {
@@ -44,6 +48,6 @@ export async function registerSupervisorRoutes(app: FastifyInstance, deps: Deps)
       packageFailures ? `${packageFailures} błędów paczek / 7 dni` : null,
       openChanges ? `${openChanges} niezweryfikowanych zmian źródłowych` : null
     ].filter(Boolean);
-    return { generatedAt: now.toISOString(), users: { total: usersTotal, new24h: users24h }, cases: { total: casesTotal, new7d: cases7d }, commerce: { orders7d, netRevenueGrosz, failedPayments7d, ranking, noSales }, operations: { pendingNotifications, failedNotifications, openChanges, renderFailures7d: renderFailures, packageFailures7d: packageFailures }, alerts };
+    return { generatedAt: now.toISOString(), users: { total: usersTotal, new24h: users24h }, cases: { total: casesTotal, new7d: cases7d }, commerce: { orders7d, netRevenueGrosz, failedPayments7d, ranking, noSales }, access: { activeEntitlementsTotal, documentsTotal, completedPackagesTotal }, operations: { pendingNotifications, failedNotifications, openChanges, renderFailures7d: renderFailures, packageFailures7d: packageFailures, auditEvents24h }, alerts };
   });
 }
