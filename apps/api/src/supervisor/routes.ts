@@ -4,6 +4,30 @@ import { prisma } from '@dotacjapro/db';
 type Deps = { requireWorkerSecret: (request: FastifyRequest) => void };
 
 export async function registerSupervisorRoutes(app: FastifyInstance, deps: Deps) {
+  app.post('/v1/internal/supervisor/activity-event', async (request, reply) => {
+    deps.requireWorkerSecret(request);
+
+    const body = request.body as { action?: unknown };
+    const action = typeof body?.action === 'string'
+      ? body.action.trim().slice(0, 120)
+      : '';
+
+    if (!action) {
+      return reply.code(400).send({ error: 'ACTION_REQUIRED' });
+    }
+
+    await prisma.auditEvent.create({
+      data: {
+        actorType: 'SYSTEM',
+        action: 'APP_ACTIVITY',
+        entity: 'DORADCAPRO',
+        metadata: { action }
+      }
+    });
+
+    return reply.code(201).send({ status: 'RECORDED' });
+  });
+
   app.get('/v1/internal/supervisor/summary', async (request) => {
     deps.requireWorkerSecret(request);
     const now = new Date();
