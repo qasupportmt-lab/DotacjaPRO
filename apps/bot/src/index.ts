@@ -155,6 +155,7 @@ bot.callbackQuery('menu:pakiety', async (ctx) => {
 });
 
 bot.callbackQuery('menu:pomoc', async (ctx) => {
+  void recordAppActivity('telegram:menu:pomoc');
   await ctx.answerCallbackQuery();
   await ctx.editMessageText('<b>Pomoc DoradcaPRO</b>\n\nWybierz funkcję z menu lub otwórz aplikację. Polecenie /help pokazuje także dostępne komendy.', { parse_mode: 'HTML', reply_markup: new InlineKeyboard().webApp('Otwórz DoradcęPRO', appBaseUrl).row().text('Wróć', 'menu:home') });
 });
@@ -320,7 +321,7 @@ bot.command('supervisor', async (ctx) => {
       `Gotowe paczki: ${data.access?.completedPackagesTotal ?? 0}`,
       '',
       '<b>Operacje</b>',
-      `Zdarzenia audytowe 24h: ${data.operations.auditEvents24h ?? 0}`,
+      `Aktywność DoradcaPRO/Telegram 24h: ${data.operations.auditEvents24h ?? 0}`,
       `Oczekujące powiadomienia: ${data.operations.pendingNotifications}`,
       `Błędy powiadomień: ${data.operations.failedNotifications}`,
       `Błędy dokumentów/paczek 7d: ${data.operations.renderFailures7d}/${data.operations.packageFailures7d}`,
@@ -356,6 +357,7 @@ bot.command('status', async (ctx) => {
 });
 
 bot.command('problem', async (ctx) => {
+  void recordAppActivity('telegram:command:problem');
   await ctx.reply(
     '<b>Zgłoś problem</b>\n\nWybierz kategorię. Następnie wyślij jedną wiadomość z opisem tego, co nie działa.',
     { parse_mode: 'HTML', reply_markup: supportCategoryMenu() }
@@ -363,6 +365,7 @@ bot.command('problem', async (ctx) => {
 });
 
 bot.callbackQuery('menu:problem', async (ctx) => {
+  void recordAppActivity('telegram:menu:problem');
   await ctx.answerCallbackQuery();
   await ctx.editMessageText(
     '<b>Zgłoś problem</b>\n\nWybierz kategorię. Następnie wyślij jedną wiadomość z opisem tego, co nie działa.',
