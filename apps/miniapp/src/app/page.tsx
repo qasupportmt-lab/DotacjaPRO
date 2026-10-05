@@ -151,6 +151,15 @@ type AdminReviewQueue = {
   formTemplates: Array<Record<string, any>>;
 };
 
+type AdminAccessSummary = {
+  users: Array<{
+    userRef: string;
+    packages: Array<{ code: string; name: string }>;
+    documentCount: number;
+    completedPackageCount: number;
+  }>;
+};
+
 type AdminAccountingSummary = {
   generatedAt: string;
   quarter: {
@@ -235,6 +244,7 @@ export default function Home() {
   const [adminMode, setAdminMode] = useState(false);
   const [adminQueue, setAdminQueue] = useState<AdminReviewQueue | null>(null);
   const [adminAccounting, setAdminAccounting] = useState<AdminAccountingSummary | null>(null);
+  const [adminAccess, setAdminAccess] = useState<AdminAccessSummary | null>(null);
   const [adminMessage, setAdminMessage] = useState<string | null>(null);
   const [supportOpen, setSupportOpen] = useState(false);
   const [supportCategory, setSupportCategory] = useState('TECHNICAL');
@@ -708,11 +718,28 @@ export default function Home() {
     }
   }
 
+  async function loadAdminAccess(sessionToken = token) {
+    if (!sessionToken) return;
+    try {
+      const res = await fetch(`${API}/v1/admin/commerce/access`, {
+        headers: {
+          Authorization: `Bearer ${sessionToken}`,
+          'Content-Type': 'application/json'
+        }
+      });
+      if (!res.ok) throw new Error('Nie udało się pobrać audytu dostępów.');
+      setAdminAccess(await res.json());
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Błąd audytu dostępów');
+    }
+  }
+
   async function refreshAdminPanel(sessionToken = token) {
     if (!sessionToken) return;
     await Promise.all([
       loadAdminQueue(sessionToken),
-      loadAdminAccounting(sessionToken)
+      loadAdminAccounting(sessionToken),
+      loadAdminAccess(sessionToken)
     ]);
   }
 
@@ -1466,6 +1493,24 @@ export default function Home() {
                   Księgowa oznaczyła pozycje wymagające weryfikacji: {adminAccounting.pit36.reviewReasons.join(', ')}
                 </p>
               )}
+            </div>
+          )}
+
+          <h3 className="admin-section-title">Dostępy użytkowników</h3>
+          {!adminAccess ? (
+            <p>Ładowanie dostępów…</p>
+          ) : adminAccess.users.length === 0 ? (
+            <p className="verified">✓ Brak aktywnych dostępów użytkowników.</p>
+          ) : (
+            <div className="admin-groups">
+              {adminAccess.users.map((user) => (
+                <div className="admin-item" key={user.userRef}>
+                  <strong>Użytkownik {user.userRef}</strong>
+                  <p>Pakiety: {user.packages.length ? user.packages.map((item) => item.name).join(', ') : 'brak'}</p>
+                  <p>Dokumenty: {user.documentCount}</p>
+                  <p>Gotowe paczki: {user.completedPackageCount}</p>
+                </div>
+              ))}
             </div>
           )}
 
