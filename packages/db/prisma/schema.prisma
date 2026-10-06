@@ -632,10 +632,28 @@ model Entitlement {
   grantedAt  DateTime @default(now())
   revokedAt  DateTime?
   metadata   Json?
+  redemptionTokens AccessRedemptionToken[]
 
   @@unique([userId, productId, orderId])
   @@index([userId, status])
   @@index([productId, status])
+}
+
+model AccessRedemptionToken {
+  id            String   @id @default(cuid())
+  entitlementId String
+  entitlement   Entitlement @relation(fields: [entitlementId], references: [id], onDelete: Cascade)
+  tokenHash     String   @unique
+  status        String   @default("ISSUED")
+  purpose       String   @default("PRODUCT_ACCESS")
+  expiresAt     DateTime
+  issuedAt      DateTime @default(now())
+  redeemedAt    DateTime?
+  revokedAt     DateTime?
+  metadata      Json?
+
+  @@index([entitlementId, status])
+  @@index([expiresAt, status])
 }
 
 model SaleTransaction {
