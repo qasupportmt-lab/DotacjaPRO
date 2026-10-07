@@ -35,6 +35,24 @@ const orderSchema = z.object({
   legalAcceptanceId: z.string().trim().min(1).max(200)
 });
 
+const accessKeyIssueSchema = z.object({
+  entitlementId: z.string().trim().min(1).max(240),
+  expiresInHours: z.number().int().min(1).max(24 * 90).default(24 * 30),
+  purpose: z.string().trim().min(1).max(80).default('PRODUCT_ACCESS')
+});
+
+const accessKeyRedeemSchema = z.object({
+  accessKey: z.string().trim().regex(/^ak1_[A-Za-z0-9_-]{40,60}$/)
+});
+
+function generateAccessKey() {
+  return `ak1_${crypto.randomBytes(32).toString('base64url')}`;
+}
+
+function hashAccessKey(accessKey: string) {
+  return crypto.createHash('sha256').update(accessKey).digest('hex');
+}
+
 const paymentRecordSchema = z.object({
   provider: z.string().trim().min(2).max(40).transform((value) => value.toUpperCase()),
   providerEventId: z.string().trim().min(1).max(240),
@@ -272,6 +290,179 @@ export async function registerCommerceRoutes(
     });
 
     return { entitlements };
+  });
+
+
+  app.post('/v1/internal/access-keys/issue', async (request, reply) => {
+    deps.requireWorkerSecret(request);
+    const parsed = accessKeyIssueSchema.safeParse(request.body);
+    if (!parsed.success) {
+      return reply.code(400).send({
+        error: 'INVALID_ACCESS_KEY_ISSUE_REQUEST',
+        details: parsed.error.flatten()
+      });
+    }
+
+    const entitlement = await prisma.entitlement.findUnique({
+      where: { id: parsed.data.entitlementId },
+      include: {
+        order: { select: { id: true, status: true } },
+        product: { select: { id: true, code: true, name: true } }
+      }
+    });
+
+    if (!entitlement || entitlement.status !== 'ACTIVE') {
+      return reply.code(409).send({ error: 'ACTIVE_ENTITLEMENT_REQUIRED' });
+    }
+    if (!entitlement.order || entitlement.order.status !== 'PAID') {
+      return reply.code(409).send({ error: 'PAID_ORDER_REQUIRED' });
+    }
+
+    const now = new Date();
+    const expiresAt = new Date(
+      now.getTime() + parsed.data.expiresInHours * 60 * 60 * 1000
+    );
+    const accessKey = generateAccessKey();
+    const tokenHash = hashAccessKey(accessKey);
+
+    const issued = await prisma.$transaction(async (tx) => {
+      await tx.accessRedemptionToken.updateMany({
+        where: {
+          entitlementId: entitlement.id,
+          status: 'ISSUED'
+        },
+        data: {
+          status: 'REVOKED',
+          revokedAt: now
+        }
+      });
+
+      const token = await tx.accessRedemptionToken.create({
+        data: {
+          entitlementId: entitlement.id,
+          tokenHash,
+          purpose: parsed.data.purpose,
+          expiresAt,
+          metadata: {
+            orderId: entitlement.order?.id,
+            productCode: entitlement.product.code
+          }
+        },
+        select: {
+          id: true,
+          entitlementId: true,
+          purpose: true,
+          expiresAt: true,
+          issuedAt: true
+        }
+      });
+
+      await tx.auditEvent.create({
+        data: {
+          userId: entitlement.userId,
+          actorType: 'SYSTEM',
+          action: 'ACCESS_KEY_ISSUED',
+          entity: 'AccessRedemptionToken',
+          entityId: token.id,
+          metadata: {
+            entitlementId: entitlement.id,
+            orderId: entitlement.order?.id,
+            productCode: entitlement.product.code,
+            expiresAt: expiresAt.toISOString(),
+            purpose: parsed.data.purpose
+          }
+        }
+      });
+
+      return token;
+    });
+
+    return {
+      token: issued,
+      accessKey,
+      security: {
+        plaintextStored: false,
+        singleUse: true
+      }
+    };
+  });
+
+  app.post('/v1/me/access-keys/redeem', async (request, reply) => {
+    const userId = await deps.requireUserId(request);
+    const parsed = accessKeyRedeemSchema.safeParse(request.body);
+    if (!parsed.success) {
+      return reply.code(400).send({ error: 'INVALID_ACCESS_KEY' });
+    }
+
+    const tokenHash = hashAccessKey(parsed.data.accessKey);
+    const token = await prisma.accessRedemptionToken.findUnique({
+      where: { tokenHash },
+      include: {
+        entitlement: {
+          include: {
+            product: {
+              select: {
+                code: true,
+                name: true,
+                kind: true,
+                deliveryType: true
+              }
+            }
+          }
+        }
+      }
+    });
+
+    if (!token || token.entitlement.userId !== userId) {
+      return reply.code(400).send({ error: 'INVALID_ACCESS_KEY' });
+    }
+    if (token.status !== 'ISSUED') {
+      return reply.code(409).send({ error: 'ACCESS_KEY_NOT_ACTIVE' });
+    }
+    if (token.expiresAt <= new Date()) {
+      await prisma.accessRedemptionToken.update({
+        where: { id: token.id },
+        data: { status: 'EXPIRED' }
+      });
+      return reply.code(410).send({ error: 'ACCESS_KEY_EXPIRED' });
+    }
+    if (token.entitlement.status !== 'ACTIVE') {
+      return reply.code(409).send({ error: 'ENTITLEMENT_NOT_ACTIVE' });
+    }
+
+    const now = new Date();
+    await prisma.$transaction([
+      prisma.accessRedemptionToken.update({
+        where: { id: token.id },
+        data: {
+          status: 'REDEEMED',
+          redeemedAt: now
+        }
+      }),
+      prisma.auditEvent.create({
+        data: {
+          userId,
+          actorType: 'USER',
+          action: 'ACCESS_KEY_REDEEMED',
+          entity: 'AccessRedemptionToken',
+          entityId: token.id,
+          metadata: {
+            entitlementId: token.entitlementId,
+            productCode: token.entitlement.product.code,
+            purpose: token.purpose
+          }
+        }
+      })
+    ]);
+
+    return {
+      status: 'REDEEMED',
+      entitlement: {
+        id: token.entitlement.id,
+        product: token.entitlement.product,
+        grantedAt: token.entitlement.grantedAt
+      }
+    };
   });
 
   app.post('/v1/orders', async (request, reply) => {
@@ -652,6 +843,23 @@ export async function registerCommerceRoutes(
             revokedAt: occurredAt
           }
         });
+
+        const refundedEntitlements = await tx.entitlement.findMany({
+          where: { orderId: order.id },
+          select: { id: true }
+        });
+        if (refundedEntitlements.length > 0) {
+          await tx.accessRedemptionToken.updateMany({
+            where: {
+              entitlementId: { in: refundedEntitlements.map((item) => item.id) },
+              status: 'ISSUED'
+            },
+            data: {
+              status: 'REVOKED',
+              revokedAt: occurredAt
+            }
+          });
+        }
       }
 
       if (['FAILED', 'CANCELLED'].includes(input.status) && order.status !== 'PAID') {
