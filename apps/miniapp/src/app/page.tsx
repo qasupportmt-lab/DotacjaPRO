@@ -2696,6 +2696,116 @@ export default function Home() {
               </p>
             )}
           </> : <p>Profil jest gotowy do dalszej kwalifikacji i monitorowania aktualnych naborów.</p>}
+
+          {(commerceProducts.length > 0 || checkoutMessage || checkoutOrder) && (
+            <section className="commerce-panel">
+              <div className="commerce-head">
+                <div>
+                  <span className="eyebrow">ZAKUP I DOSTĘP</span>
+                  <h2>Produkty doradcyPRO</h2>
+                </div>
+                {checkoutReadiness && (
+                  <span className={checkoutReadiness.ready ? 'verified' : 'qualification-status'}>
+                    {checkoutReadiness.ready ? 'Płatności aktywne' : 'Płatności w przygotowaniu'}
+                  </span>
+                )}
+              </div>
+
+              {checkoutOrder && (
+                <div className="commerce-order-state">
+                  <strong>{checkoutOrder.product.name}</strong>
+                  <p>
+                    Status zamówienia: <b>{checkoutOrder.status}</b>
+                    {' · '}
+                    {formatPriceGrosz(checkoutOrder.amountGrossGrosz, checkoutOrder.currency)}
+                  </p>
+                  {checkoutOrder.entitlements.length > 0 && (
+                    <p className="verified">
+                      ✓ Dostęp aktywny. Klucz aktywacyjny jest wysyłany na zweryfikowany adres e-mail.
+                    </p>
+                  )}
+                </div>
+              )}
+
+              {commerceProducts.length > 0 && (
+                <>
+                  <div className="commerce-products">
+                    {commerceProducts.map((product) => (
+                      <article className="commerce-product" key={product.code}>
+                        <div>
+                          <strong>{product.name}</strong>
+                          {product.description && <p>{product.description}</p>}
+                        </div>
+                        <div className="commerce-price">
+                          {formatPriceGrosz(product.priceGrossGrosz, product.currency)}
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => startProductCheckout(product)}
+                          disabled={
+                            !checkoutReadiness?.ready ||
+                            checkoutBusyCode !== null ||
+                            !checkoutTermsAccepted ||
+                            !checkoutImmediateConsent ||
+                            !checkoutWithdrawalAcknowledged
+                          }
+                        >
+                          {checkoutBusyCode === product.code
+                            ? 'Przekierowanie do Stripe…'
+                            : 'Kup teraz'}
+                        </button>
+                      </article>
+                    ))}
+                  </div>
+
+                  <div className="checkout-consents">
+                    <label className="legal-check">
+                      <input
+                        type="checkbox"
+                        checked={checkoutTermsAccepted}
+                        onChange={(event) => setCheckoutTermsAccepted(event.target.checked)}
+                      />
+                      <span>
+                        Akceptuję aktualny <a href="/legal" target="_blank" rel="noreferrer">Regulamin, licencję i Politykę prywatności</a> dla tego zakupu.
+                      </span>
+                    </label>
+
+                    <label className="legal-check">
+                      <input
+                        type="checkbox"
+                        checked={checkoutImmediateConsent}
+                        onChange={(event) => setCheckoutImmediateConsent(event.target.checked)}
+                      />
+                      <span>
+                        Żądam rozpoczęcia dostarczania treści cyfrowej / dostępu niezwłocznie po potwierdzeniu płatności.
+                      </span>
+                    </label>
+
+                    <label className="legal-check">
+                      <input
+                        type="checkbox"
+                        checked={checkoutWithdrawalAcknowledged}
+                        onChange={(event) => setCheckoutWithdrawalAcknowledged(event.target.checked)}
+                      />
+                      <span>
+                        Przyjmuję do wiadomości zasady prawa odstąpienia dotyczące treści cyfrowej opisane w aktualnym Regulaminie.
+                      </span>
+                    </label>
+                  </div>
+                </>
+              )}
+
+              {checkoutMessage && (
+                <p className={
+                  checkoutOrder?.status === 'PAID'
+                    ? 'verified'
+                    : 'muted-box'
+                }>
+                  {checkoutMessage}
+                </p>
+              )}
+            </section>
+          )}
         </>}
 
         {error && <p className="error">{error}</p>}
