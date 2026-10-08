@@ -66,7 +66,7 @@ export default async function LegalPage() {
   return (
     <main className="shell">
       <section className="brand">
-        <div className="eyebrow">DORADCYPRO</div>
+        <div className="eyebrow">doradcyPRO</div>
         <h1>Regulamin, licencja i RODO</h1>
         <p>Aktualne informacje prawne dotyczące korzystania z doradcyPRO.</p>
       </section>
