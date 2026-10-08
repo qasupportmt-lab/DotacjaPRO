@@ -1309,7 +1309,21 @@ export async function registerCommerceRoutes(
           }
         });
 
-        return reply.code(recorded.statusCode).send(recorded.json());
+        if (recorded.statusCode >= 400) {
+          return reply.code(recorded.statusCode).send(recorded.json());
+        }
+
+        const paymentResult = recorded.json();
+        const fulfillment =
+          status === 'COMPLETED'
+            ? await deliverPaidDigitalAccess(app, order.id)
+            : null;
+
+        return {
+          received: true,
+          payment: paymentResult,
+          fulfillment
+        };
       }
 
       if (event.type === 'charge.refunded') {
