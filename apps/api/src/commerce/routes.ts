@@ -719,6 +719,52 @@ export async function registerCommerceRoutes(
     return { orders };
   });
 
+  app.get('/v1/me/orders/:id', async (request, reply) => {
+    const userId = await deps.requireUserId(request);
+    const id = String((request.params as { id?: string }).id ?? '').trim();
+    if (!id) {
+      return reply.code(400).send({ error: 'ORDER_ID_REQUIRED' });
+    }
+
+    const order = await prisma.commerceOrder.findFirst({
+      where: { id, userId },
+      include: {
+        product: {
+          select: {
+            code: true,
+            name: true,
+            deliveryType: true
+          }
+        },
+        payments: {
+          orderBy: { createdAt: 'desc' },
+          take: 5,
+          select: {
+            status: true,
+            amountReceivedGrosz: true,
+            refundedGrosz: true,
+            receivedAt: true,
+            refundedAt: true
+          }
+        },
+        entitlements: {
+          where: { status: 'ACTIVE' },
+          select: {
+            id: true,
+            status: true,
+            grantedAt: true
+          }
+        }
+      }
+    });
+
+    if (!order) {
+      return reply.code(404).send({ error: 'ORDER_NOT_FOUND' });
+    }
+
+    return { order };
+  });
+
   app.get('/v1/me/entitlements', async (request) => {
     const userId = await deps.requireUserId(request);
     const entitlements = await prisma.entitlement.findMany({
@@ -1427,7 +1473,12 @@ export async function registerCommerceRoutes(
         id: parsed.data.orderId,
         userId
       },
-      include: { product: true }
+      include: {
+        entitlements: {
+          where: { status: 'ACTIVE' },
+          select: { id: true, grantedAt: true }
+        }
+      }
     });
 
     if (!order) {
@@ -1436,6 +1487,17 @@ export async function registerCommerceRoutes(
     if (order.provider !== 'STRIPE') {
       return reply.code(409).send({ error: 'ORDER_PROVIDER_MISMATCH' });
     }
+
+    if (!process.env.STRIPE_SECRET_KEY?.trim()) {
+      return {
+        orderId: order.id,
+        orderStatus: order.status,
+        entitlementActive: order.entitlements.length > 0,
+        fulfillmentSource: 'SIGNED_STRIPE_WEBHOOK',
+        sessionLookup: 'UNAVAILABLE_WITH_PAYMENT_LINK_MODE'
+      };
+    }
+
     if (
       order.providerCheckoutId &&
       order.providerCheckoutId !== parsed.data.sessionId
@@ -1445,10 +1507,7 @@ export async function registerCommerceRoutes(
 
     const session = await stripeGetCheckoutSession(parsed.data.sessionId);
 
-    if (
-      session.client_reference_id !== order.id ||
-      session.metadata?.orderId !== order.id
-    ) {
+    if (session.client_reference_id !== order.id) {
       return reply.code(409).send({ error: 'STRIPE_ORDER_REFERENCE_MISMATCH' });
     }
     if ((session.currency || '').toUpperCase() !== order.currency) {
@@ -1457,79 +1516,13 @@ export async function registerCommerceRoutes(
     if (session.amount_total !== order.amountGrossGrosz) {
       return reply.code(409).send({ error: 'STRIPE_AMOUNT_MISMATCH' });
     }
-    if (session.payment_status !== 'paid') {
-      return reply.code(409).send({
-        error: 'PAYMENT_NOT_COMPLETED',
-        paymentStatus: session.payment_status ?? null
-      });
-    }
-
-    const workerSecret = process.env.INTERNAL_WORKER_SECRET;
-    if (!workerSecret) {
-      throw Object.assign(
-        new Error('INTERNAL_WORKER_SECRET_NOT_CONFIGURED'),
-        { statusCode: 500 }
-      );
-    }
-
-    const paymentIntentId =
-      typeof session.payment_intent === 'string'
-        ? session.payment_intent
-        : session.payment_intent?.id || session.id;
-
-    const recorded = await app.inject({
-      method: 'POST',
-      url: '/v1/internal/payments/record',
-      headers: {
-        'content-type': 'application/json',
-        'x-worker-secret': workerSecret
-      },
-      payload: {
-        provider: 'STRIPE',
-        providerEventId: `checkout-confirm:${session.id}:paid`,
-        eventType: 'checkout.session.confirmed',
-        providerPaymentId: paymentIntentId,
-        orderId: order.id,
-        status: 'COMPLETED',
-        currency: order.currency,
-        amountReceivedGrosz: session.amount_total,
-        refundedGrosz: 0,
-        occurredAt: new Date().toISOString(),
-        isTest: session.livemode === false,
-        metadata: {
-          stripeSessionId: session.id,
-          confirmationMode: 'server_verified_return'
-        }
-      }
-    });
-
-    const body = recorded.json();
-    if (recorded.statusCode >= 400) {
-      return reply.code(recorded.statusCode).send(body);
-    }
-
-    const entitlement = await prisma.entitlement.findFirst({
-      where: {
-        userId,
-        orderId: order.id,
-        status: 'ACTIVE'
-      },
-      include: {
-        product: {
-          select: {
-            code: true,
-            name: true,
-            deliveryType: true
-          }
-        }
-      }
-    });
 
     return {
-      status: 'PAID',
       orderId: order.id,
-      entitlement,
-      paymentRecord: body
+      orderStatus: order.status,
+      stripePaymentStatus: session.payment_status ?? null,
+      entitlementActive: order.entitlements.length > 0,
+      fulfillmentSource: 'SIGNED_STRIPE_WEBHOOK'
     };
   });
 
