@@ -28,7 +28,7 @@ def _instruction_lines(payload: dict[str, Any]) -> list[str]:
     }
 
     lines = [
-        "DOTACJAPRO — INSTRUKCJA ZŁOŻENIA DOKUMENTÓW",
+        "DORADCYPRO — INSTRUKCJA ZŁOŻENIA DOKUMENTÓW",
         "",
         f"Nabór: {call.get('title') or ''}",
         f"Instytucja: {instruction.get('institutionName') or call.get('institutionName') or ''}",
@@ -80,7 +80,7 @@ def _instruction_lines(payload: dict[str, Any]) -> list[str]:
         "4. Nie zmieniaj układu ani treści urzędowych formularzy.",
         "5. Zachowaj kopię złożonego kompletu oraz potwierdzenie złożenia.",
         "",
-        "DotacjaPRO przygotowuje dokumenty na zarejestrowanych wersjach urzędowych.",
+        "doradcyPRO przygotowuje dokumenty na zarejestrowanych wersjach urzędowych.",
         "Ostateczną decyzję o przyjęciu i ocenie wniosku podejmuje właściwa instytucja.",
     ])
 
@@ -100,7 +100,7 @@ def build_package(payload: dict[str, Any]) -> tuple[bytes, str, str]:
 <html lang="pl">
 <head>
 <meta charset="utf-8">
-<title>DotacjaPRO — instrukcja złożenia</title>
+<title>doradcyPRO — instrukcja złożenia</title>
 <style>
 body{font-family:Arial,sans-serif;max-width:900px;margin:40px auto;padding:0 24px;line-height:1.45;color:#111}
 h1{font-size:24px}h2{font-size:18px;margin-top:28px}
@@ -110,7 +110,7 @@ pre{white-space:pre-wrap;font-family:Arial,sans-serif}
 </style>
 </head>
 <body>
-<h1>DotacjaPRO — instrukcja złożenia dokumentów</h1>
+<h1>doradcyPRO — instrukcja złożenia dokumentów</h1>
 <pre>""" + html.escape(instruction_txt) + """</pre>
 <div class="footer">Dokument wygenerowany na podstawie zweryfikowanej instrukcji przypisanej do wybranego naboru.</div>
 </body></html>"""
@@ -208,5 +208,5 @@ pre{white-space:pre-wrap;font-family:Arial,sans-serif}
 
     content = buffer.getvalue()
     digest = hashlib.sha256(content).hexdigest()
-    name = f"DotacjaPRO-sprawa-{_safe_name(case_id)}.zip"
+    name = f"doradcyPRO-sprawa-{_safe_name(case_id)}.zip"
     return content, digest, name
