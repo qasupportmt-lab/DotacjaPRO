@@ -2,7 +2,7 @@
 
 Status: DESIGN BASELINE
 Data: 2026-10-06
-Zakres: obecna aplikacja DoradcaPRO / przyszła marka po rebrandingu.
+Zakres: obecna aplikacja doradcyPRO / przyszła marka po rebrandingu.
 
 ## 1. Zasada nadrzędna
 
