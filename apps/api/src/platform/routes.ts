@@ -75,10 +75,52 @@ export async function registerPlatformRoutes(
   app: FastifyInstance,
   deps: PlatformRouteDeps
 ) {
-  app.get('/v1/platform/products', async () => ({
-    version: '2026-10-06.1',
-    products: PRODUCT_CATALOG
-  }));
+  app.get('/v1/platform/products', async () => {
+    const [verifiedCalls, verifiedForms] = await Promise.all([
+      prisma.fundingCall.count({
+        where: {
+          verificationStatus: 'VERIFIED',
+          status: { in: ['ANNOUNCED', 'OPEN'] }
+        }
+      }),
+      prisma.officialFormTemplate.count({
+        where: {
+          active: true,
+          mappingStatus: 'VERIFIED',
+          mappingVerifiedAt: { not: null }
+        }
+      })
+    ]);
+
+    const products = PRODUCT_CATALOG.map((product) => {
+      if (product.code === 'GRANTS') {
+        return {
+          ...product,
+          availability: verifiedCalls > 0 ? 'ACTIVE' : 'CONFIGURATION_REQUIRED',
+          readiness: { verifiedCalls }
+        };
+      }
+
+      if (product.code === 'DOCUMENTS') {
+        return {
+          ...product,
+          availability: verifiedForms > 0 ? 'ACTIVE' : 'CONFIGURATION_REQUIRED',
+          readiness: { verifiedForms }
+        };
+      }
+
+      return {
+        ...product,
+        availability: 'PLANNED',
+        readiness: {}
+      };
+    });
+
+    return {
+      version: '2026-10-08.1',
+      products
+    };
+  });
 
   app.get('/v1/me/profile-360', async (request, reply) => {
     const userId = await deps.requireUserId(request);
