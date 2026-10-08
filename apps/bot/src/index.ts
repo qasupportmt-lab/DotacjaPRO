@@ -207,7 +207,7 @@ bot.command('whoami', async (ctx) => {
       'Twój identyfikator Telegram:',
       `<code>${ctx.from?.id ?? 'brak'}</code>`,
       '',
-      'Administrator DotacjaPRO może dodać ten numer do ADMIN_TELEGRAM_USER_IDS.'
+      'Administrator doradcyPRO może dodać ten numer do ADMIN_TELEGRAM_USER_IDS.'
     ].join('\n'),
     { parse_mode: 'HTML' }
   );
@@ -235,7 +235,7 @@ bot.command('ksiegowa', async (ctx) => {
     );
 
     if (response.status === 403) {
-      return ctx.reply('Ta funkcja jest dostępna tylko dla administratora DotacjaPRO.');
+      return ctx.reply('Ta funkcja jest dostępna tylko dla administratora doradcyPRO.');
     }
     if (!response.ok) {
       throw new Error('Accounting summary HTTP ' + response.status);
@@ -271,7 +271,7 @@ bot.command('ksiegowa', async (ctx) => {
 
     await ctx.reply(
       [
-        '<b>DotacjaPRO — Księgowa</b>',
+        '<b>doradcyPRO — Księgowa</b>',
         `Q${q.quarter} ${q.year}: ${q.dueRevenuePln} zł / ${q.limitPln ?? '—'} zł`,
         limitLine,
         '',
@@ -291,7 +291,7 @@ bot.command('ksiegowa', async (ctx) => {
 });
 
 bot.command('supervisor', async (ctx) => {
-  if (!isAdminTelegram(ctx.from?.id)) return ctx.reply('Ta funkcja jest dostępna tylko dla administratora DotacjaPRO.');
+  if (!isAdminTelegram(ctx.from?.id)) return ctx.reply('Ta funkcja jest dostępna tylko dla administratora doradcyPRO.');
   if (!workerSecret) return ctx.reply('Supervisor nie jest skonfigurowany.');
   try {
     const response = await fetch(apiBaseUrl.replace(/\/$/, '') + '/v1/internal/supervisor/summary', {
@@ -303,7 +303,7 @@ bot.command('supervisor', async (ctx) => {
     const top = data.commerce.ranking?.[0];
     const alerts = data.alerts?.length ? data.alerts.map((x: string) => '• ' + x).join('\n') : 'Brak aktywnych alertów.';
     await ctx.reply([
-      '<b>DotacjaPRO — SUPERVISOR</b>',
+      '<b>doradcyPRO — SUPERVISOR</b>',
       '',
       '<b>Użytkownicy</b>',
       `Łącznie: ${data.users.total} | nowe 24h: ${data.users.new24h}`,
@@ -336,14 +336,14 @@ bot.command('supervisor', async (ctx) => {
 });
 
 bot.command('status', async (ctx) => {
-  if (!isAdminTelegram(ctx.from?.id)) return ctx.reply('Ta funkcja jest dostępna tylko dla administratora DotacjaPRO.');
+  if (!isAdminTelegram(ctx.from?.id)) return ctx.reply('Ta funkcja jest dostępna tylko dla administratora doradcyPRO.');
   try {
     const [api, webhook] = await Promise.all([
       fetch(apiBaseUrl.replace(/\/$/, '') + '/ready', { signal: AbortSignal.timeout(10_000) }),
       bot.api.getWebhookInfo()
     ]);
     await ctx.reply([
-      '<b>DotacjaPRO — STATUS</b>',
+      '<b>doradcyPRO — STATUS</b>',
       `Bot: OK`,
       `API: ${api.ok ? 'OK' : 'BŁĄD ' + api.status}`,
       `Webhook: ${webhook.url ? 'OK' : 'BRAK'}`,
@@ -438,10 +438,10 @@ bot.on('message:text', async (ctx) => {
 });
 
 bot.command('help', async (ctx) => {
-  const keyboard = new InlineKeyboard().webApp('Otwórz DotacjaPRO', appBaseUrl);
+  const keyboard = new InlineKeyboard().webApp('Otwórz doradcyPRO', appBaseUrl);
   await ctx.reply(
     [
-      '<b>DotacjaPRO</b>',
+      '<b>doradcyPRO</b>',
       '/start — otwórz aplikację',
       '/dotacje — sprawdź dostępne finansowanie',
       '/whoami — pokaż Twój Telegram ID',
@@ -503,7 +503,7 @@ async function deliverPendingNotifications(limit = 100) {
 
   for (const item of data.notifications) {
     try {
-      const keyboard = new InlineKeyboard().webApp('Otwórz DotacjaPRO', appBaseUrl);
+      const keyboard = new InlineKeyboard().webApp('Otwórz doradcyPRO', appBaseUrl);
       await bot.api.sendMessage(
         Number(item.telegramUserId),
         '<b>' + escapeHtml(item.title) + '</b>\n\n' + escapeHtml(item.body),
