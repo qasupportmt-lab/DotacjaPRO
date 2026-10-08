@@ -321,6 +321,7 @@ type StripeCheckoutSession = {
   metadata?: Record<string, string>;
   livemode?: boolean;
   payment_intent?: string | { id?: string } | null;
+  payment_link?: string | { id?: string } | null;
 };
 
 function stripeSecret() {
@@ -975,6 +976,258 @@ export async function registerCommerceRoutes(
       provider
     });
   });
+
+  app.post(
+    '/v1/payments/stripe/webhook',
+    { config: { rawBody: true } },
+    async (request, reply) => {
+      const signature = request.headers['stripe-signature'];
+      const rawBody = (request as FastifyRequestWithRawBody).rawBody;
+
+      if (typeof signature !== 'string' || !rawBody) {
+        return reply.code(400).send({ error: 'STRIPE_SIGNATURE_REQUIRED' });
+      }
+
+      if (
+        !verifyStripeSignature(
+          rawBody,
+          signature,
+          stripeWebhookSecret()
+        )
+      ) {
+        return reply.code(400).send({ error: 'INVALID_STRIPE_SIGNATURE' });
+      }
+
+      let event: StripeWebhookEnvelope;
+      try {
+        event = JSON.parse(rawBody.toString('utf8')) as StripeWebhookEnvelope;
+      } catch {
+        return reply.code(400).send({ error: 'INVALID_STRIPE_EVENT_JSON' });
+      }
+
+      if (!event.id || !event.type || !event.data?.object) {
+        return reply.code(400).send({ error: 'INVALID_STRIPE_EVENT' });
+      }
+
+      const occurredAt = new Date(event.created * 1000);
+
+      if (
+        [
+          'checkout.session.completed',
+          'checkout.session.async_payment_succeeded',
+          'checkout.session.async_payment_failed'
+        ].includes(event.type)
+      ) {
+        const session = event.data.object as StripeCheckoutSession;
+        const orderId =
+          typeof session.client_reference_id === 'string'
+            ? session.client_reference_id
+            : null;
+
+        if (!orderId) {
+          return {
+            received: true,
+            ignored: true,
+            reason: 'NO_CLIENT_REFERENCE'
+          };
+        }
+
+        const order = await prisma.commerceOrder.findUnique({
+          where: { id: orderId },
+          include: { product: true }
+        });
+
+        if (!order || order.provider !== 'STRIPE') {
+          return {
+            received: true,
+            ignored: true,
+            reason: 'ORDER_NOT_MANAGED_BY_DORADCYPRO'
+          };
+        }
+
+        const expectedLink = readStripeProductMetadata(order.product.metadata);
+        const eventPaymentLinkId =
+          typeof session.payment_link === 'string'
+            ? session.payment_link
+            : session.payment_link?.id ?? null;
+
+        if (
+          expectedLink.paymentLinkId &&
+          eventPaymentLinkId &&
+          expectedLink.paymentLinkId !== eventPaymentLinkId
+        ) {
+          return reply.code(409).send({
+            error: 'STRIPE_PAYMENT_LINK_MISMATCH'
+          });
+        }
+
+        const currency = String(session.currency ?? '').toUpperCase();
+        const amount = Number(session.amount_total ?? -1);
+
+        if (currency !== order.currency) {
+          return reply.code(409).send({
+            error: 'STRIPE_CURRENCY_MISMATCH'
+          });
+        }
+        if (amount !== order.amountGrossGrosz) {
+          return reply.code(409).send({
+            error: 'STRIPE_AMOUNT_MISMATCH'
+          });
+        }
+
+        await prisma.commerceOrder.update({
+          where: { id: order.id },
+          data: {
+            providerCheckoutId: session.id
+          }
+        });
+
+        if (
+          event.type === 'checkout.session.completed' &&
+          session.payment_status === 'unpaid'
+        ) {
+          return {
+            received: true,
+            pending: true,
+            orderId: order.id
+          };
+        }
+
+        const paymentIntentId =
+          typeof session.payment_intent === 'string'
+            ? session.payment_intent
+            : session.payment_intent?.id || session.id;
+
+        const status =
+          event.type === 'checkout.session.async_payment_failed'
+            ? 'FAILED'
+            : session.payment_status === 'paid'
+              ? 'COMPLETED'
+              : 'PENDING';
+
+        const workerSecret = process.env.INTERNAL_WORKER_SECRET;
+        if (!workerSecret) {
+          throw Object.assign(
+            new Error('INTERNAL_WORKER_SECRET_NOT_CONFIGURED'),
+            { statusCode: 500 }
+          );
+        }
+
+        const recorded = await app.inject({
+          method: 'POST',
+          url: '/v1/internal/payments/record',
+          headers: {
+            'content-type': 'application/json',
+            'x-worker-secret': workerSecret
+          },
+          payload: {
+            provider: 'STRIPE',
+            providerEventId: event.id,
+            eventType: event.type,
+            providerPaymentId: paymentIntentId,
+            orderId: order.id,
+            status,
+            currency: order.currency,
+            amountReceivedGrosz:
+              status === 'COMPLETED' ? order.amountGrossGrosz : 0,
+            refundedGrosz: 0,
+            occurredAt: occurredAt.toISOString(),
+            isTest: !event.livemode,
+            metadata: {
+              stripeSessionId: session.id,
+              paymentLinkId: eventPaymentLinkId,
+              deliveryMode: 'WEBHOOK'
+            }
+          }
+        });
+
+        return reply.code(recorded.statusCode).send(recorded.json());
+      }
+
+      if (event.type === 'charge.refunded') {
+        const charge = event.data.object as Record<string, unknown>;
+        const paymentIntentId =
+          typeof charge.payment_intent === 'string'
+            ? charge.payment_intent
+            : null;
+
+        if (!paymentIntentId) {
+          return {
+            received: true,
+            ignored: true,
+            reason: 'REFUND_WITHOUT_PAYMENT_INTENT'
+          };
+        }
+
+        const payment = await prisma.paymentRecord.findUnique({
+          where: {
+            provider_providerPaymentId: {
+              provider: 'STRIPE',
+              providerPaymentId: paymentIntentId
+            }
+          }
+        });
+
+        if (!payment) {
+          return {
+            received: true,
+            ignored: true,
+            reason: 'PAYMENT_NOT_MANAGED_BY_DORADCYPRO'
+          };
+        }
+
+        const amount = Number(charge.amount ?? payment.amountReceivedGrosz);
+        const amountRefunded = Number(charge.amount_refunded ?? 0);
+        const currency = String(charge.currency ?? payment.currency).toUpperCase();
+        const fullyRefunded =
+          charge.refunded === true ||
+          (amount > 0 && amountRefunded >= amount);
+
+        const workerSecret = process.env.INTERNAL_WORKER_SECRET;
+        if (!workerSecret) {
+          throw Object.assign(
+            new Error('INTERNAL_WORKER_SECRET_NOT_CONFIGURED'),
+            { statusCode: 500 }
+          );
+        }
+
+        const recorded = await app.inject({
+          method: 'POST',
+          url: '/v1/internal/payments/record',
+          headers: {
+            'content-type': 'application/json',
+            'x-worker-secret': workerSecret
+          },
+          payload: {
+            provider: 'STRIPE',
+            providerEventId: event.id,
+            eventType: event.type,
+            providerPaymentId: paymentIntentId,
+            orderId: payment.orderId,
+            status: fullyRefunded ? 'REFUNDED' : 'PARTIALLY_REFUNDED',
+            currency,
+            amountReceivedGrosz: payment.amountReceivedGrosz,
+            refundedGrosz: amountRefunded,
+            occurredAt: occurredAt.toISOString(),
+            isTest: !event.livemode,
+            metadata: {
+              stripeChargeId:
+                typeof charge.id === 'string' ? charge.id : null,
+              deliveryMode: 'WEBHOOK'
+            }
+          }
+        });
+
+        return reply.code(recorded.statusCode).send(recorded.json());
+      }
+
+      return {
+        received: true,
+        ignored: true,
+        eventType: event.type
+      };
+    }
+  );
 
   app.post('/v1/payments/stripe/confirm', async (request, reply) => {
     const userId = await deps.requireUserId(request);
