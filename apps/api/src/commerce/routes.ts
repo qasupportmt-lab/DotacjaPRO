@@ -1,9 +1,9 @@
-import crypto from 'node:crypto';
 import type { FastifyInstance, FastifyRequest } from 'fastify';
 import { z } from 'zod';
 import { prisma } from '@dotacjapro/db';
 import { LEGAL_VERSION } from '../legal/policy.js';
 import { envBoolean, getLegalOperatorState } from '../legal/operator.js';
+import { generateAccessKey, hashAccessKey } from './access-keys.js';
 
 type CommerceRouteDeps = {
   requireWorkerSecret: (request: FastifyRequest) => void;
@@ -44,14 +44,6 @@ const accessKeyIssueSchema = z.object({
 const accessKeyRedeemSchema = z.object({
   accessKey: z.string().trim().regex(/^ak1_[A-Za-z0-9_-]{40,60}$/)
 });
-
-function generateAccessKey() {
-  return `ak1_${crypto.randomBytes(32).toString('base64url')}`;
-}
-
-function hashAccessKey(accessKey: string) {
-  return crypto.createHash('sha256').update(accessKey).digest('hex');
-}
 
 const paymentRecordSchema = z.object({
   provider: z.string().trim().min(2).max(40).transform((value) => value.toUpperCase()),
