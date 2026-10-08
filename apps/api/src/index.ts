@@ -242,7 +242,7 @@ app.get('/v1/storage/download', async (request, reply) => {
     return reply.code(404).send({ error: 'STORAGE_OBJECT_NOT_FOUND' });
   }
 
-  const fileName = payload.storageKey.split('/').pop() || 'DoradcaPRO-document';
+  const fileName = payload.storageKey.split('/').pop() || 'doradcyPRO-document';
   reply
     .header('content-type', object.mimeType)
     .header(
@@ -5155,7 +5155,7 @@ app.post('/v1/internal/build-digests', async (request) => {
     await prisma.notification.upsert({
       where: { userId_dedupeKey: { userId: user.id, dedupeKey } },
       update: {
-        title: 'DoradcaPRO — poranny skrót',
+        title: 'doradcyPRO — poranny skrót',
         body: lines.map((line) => `• ${line}`).join('\n'),
         scheduledAt: now,
         failedAt: null,
@@ -5165,7 +5165,7 @@ app.post('/v1/internal/build-digests', async (request) => {
         userId: user.id,
         category: 'MORNING_DIGEST',
         priority: 'P5',
-        title: 'DoradcaPRO — poranny skrót',
+        title: 'doradcyPRO — poranny skrót',
         body: lines.map((line) => `• ${line}`).join('\n'),
         scheduledAt: now,
         dedupeKey
