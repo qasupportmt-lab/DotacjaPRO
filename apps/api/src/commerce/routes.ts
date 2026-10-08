@@ -1,4 +1,4 @@
-import { createHash } from 'node:crypto';
+import { createHash, createHmac, timingSafeEqual } from 'node:crypto';
 import type { FastifyInstance, FastifyRequest } from 'fastify';
 import { z } from 'zod';
 import { prisma } from '@dotacjapro/db';
@@ -11,6 +11,109 @@ type CommerceRouteDeps = {
   requireUserId: (request: FastifyRequest) => Promise<string>;
   requireAdminUserId: (request: FastifyRequest) => Promise<string>;
 };
+
+type FastifyRequestWithRawBody = FastifyRequest & {
+  rawBody?: Buffer;
+};
+
+type StripeWebhookEnvelope = {
+  id: string;
+  type: string;
+  created: number;
+  livemode: boolean;
+  data: {
+    object: Record<string, unknown>;
+  };
+};
+
+function stripeWebhookSecret() {
+  const value = process.env.STRIPE_WEBHOOK_SECRET?.trim();
+  if (!value) {
+    throw Object.assign(
+      new Error('STRIPE_WEBHOOK_SECRET_NOT_CONFIGURED'),
+      { statusCode: 503 }
+    );
+  }
+  return value;
+}
+
+function verifyStripeSignature(
+  rawBody: Buffer,
+  header: string,
+  secret: string,
+  toleranceSeconds = 300
+) {
+  const parts = header.split(',').map((item) => item.trim());
+  const timestampPart = parts.find((item) => item.startsWith('t='));
+  const signatures = parts
+    .filter((item) => item.startsWith('v1='))
+    .map((item) => item.slice(3));
+
+  if (!timestampPart || signatures.length === 0) return false;
+
+  const timestamp = Number(timestampPart.slice(2));
+  if (!Number.isFinite(timestamp)) return false;
+
+  const age = Math.abs(Math.floor(Date.now() / 1000) - timestamp);
+  if (age > toleranceSeconds) return false;
+
+  const expected = createHmac('sha256', secret)
+    .update(String(timestamp))
+    .update('.')
+    .update(rawBody)
+    .digest('hex');
+
+  const expectedBuffer = Buffer.from(expected, 'hex');
+  return signatures.some((signature) => {
+    if (!/^[a-f0-9]{64}$/i.test(signature)) return false;
+    const actual = Buffer.from(signature, 'hex');
+    return (
+      actual.length === expectedBuffer.length &&
+      timingSafeEqual(actual, expectedBuffer)
+    );
+  });
+}
+
+function stripePaymentLinkModeEnabled() {
+  return envBoolean('STRIPE_PAYMENT_LINK_MODE', false);
+}
+
+function readStripeProductMetadata(metadata: unknown) {
+  if (!metadata || typeof metadata !== 'object' || Array.isArray(metadata)) {
+    return {
+      paymentLinkUrl: null as string | null,
+      paymentLinkId: null as string | null
+    };
+  }
+
+  const value = metadata as Record<string, unknown>;
+  const rawUrl =
+    typeof value.stripePaymentLinkUrl === 'string'
+      ? value.stripePaymentLinkUrl.trim()
+      : '';
+  const rawId =
+    typeof value.stripePaymentLinkId === 'string'
+      ? value.stripePaymentLinkId.trim()
+      : '';
+
+  let paymentLinkUrl: string | null = null;
+  try {
+    const parsed = new URL(rawUrl);
+    if (
+      parsed.protocol === 'https:' &&
+      (parsed.hostname === 'buy.stripe.com' || parsed.hostname === 'book.stripe.com')
+    ) {
+      paymentLinkUrl = parsed.toString();
+    }
+  } catch {
+    paymentLinkUrl = null;
+  }
+
+  return {
+    paymentLinkUrl,
+    paymentLinkId: rawId || null
+  };
+}
 
 const productSchema = z.object({
   name: z.string().trim().min(1).max(160),
