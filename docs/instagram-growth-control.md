@@ -1,9 +1,9 @@
-# DoradcaPRO Instagram Growth & Control System
+# doradcyPRO Instagram Growth & Control System
 
 ## Cel
-Zbudować dwukanałowy system marketingowy dla DoradcaPRO wyłącznie na rynek polski:
-- Instagram DoradcaPRO PL,
-- TikTok DoradcaPRO PL,
+Zbudować dwukanałowy system marketingowy dla doradcyPRO wyłącznie na rynek polski:
+- Instagram doradcyPRO PL,
+- TikTok doradcyPRO PL,
 sterowany z prywatnego panelu właściciela w Telegramie.
 
 ## Założenia zgodności
@@ -20,7 +20,7 @@ Nie realizuje:
 2. Harmonogram roczny i kolejka treści.
 3. Monitoring komentarzy, odpowiedzi i moderacja.
 4. Odpowiadanie na wiadomości po rozpoczęciu rozmowy przez użytkownika.
-5. Automatyczne CTA do DoradcaPRO po kwalifikującym zdarzeniu użytkownika.
+5. Automatyczne CTA do doradcyPRO po kwalifikującym zdarzeniu użytkownika.
 6. Insights: reach, views, watch time, saves, shares, comments, follows i CTR.
 7. Dzienny przegląd strategii i rekomendacje zmian.
 8. Alerty ryzyka, błędów publikacji i spadków wyników.
@@ -70,7 +70,7 @@ Co miesiąc:
 
 ## Główne KPI
 North Star:
-- kwalifikowane wejścia do DoradcaPRO z Instagrama.
+- kwalifikowane wejścia do doradcyPRO z Instagrama.
 
 Wspierające:
 - non-follower reach,
@@ -140,7 +140,7 @@ REEL/POST
 -> CTA: skomentuj HASŁO / wyślij DM
 -> webhook
 -> publiczna odpowiedź + opcjonalny private reply
--> link z UTM do DoradcaPRO
+-> link z UTM do doradcyPRO
 -> rejestracja
 -> kwalifikacja
 -> pomiar konwersji.
