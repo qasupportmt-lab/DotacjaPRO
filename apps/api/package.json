@@ -16,7 +16,8 @@
     "jose": "^6.1.0",
     "zod": "^4.1.11",
     "nodemailer": "^7.0.6",
-    "@dotacjapro/rules": "workspace:*"
+    "@dotacjapro/rules": "workspace:*",
+    "stripe": "^22.6.0"
   },
   "devDependencies": {
     "@types/node": "^24.7.0",
