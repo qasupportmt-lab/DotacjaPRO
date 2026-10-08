@@ -10,7 +10,7 @@ function brevoSender() {
 
   return {
     email,
-    name: process.env.BREVO_FROM_NAME?.trim() || 'DotacjaPRO'
+    name: process.env.BREVO_FROM_NAME?.trim() || 'doradcyPRO'
   };
 }
 
@@ -124,9 +124,9 @@ export function emailProviderConfigured() {
 }
 
 export async function sendEmailVerificationCode(email: string, code: string) {
-  const subject = 'DotacjaPRO — kod weryfikacyjny';
-  const text = `Twój kod weryfikacyjny DotacjaPRO: ${code}\n\nKod jest ważny przez 10 minut.`;
-  const html = `<p>Twój kod weryfikacyjny DotacjaPRO:</p><p style="font-size:24px;font-weight:700;letter-spacing:4px">${code}</p><p>Kod jest ważny przez 10 minut.</p>`;
+  const subject = 'doradcyPRO — kod weryfikacyjny';
+  const text = `Twój kod weryfikacyjny doradcyPRO: ${code}\n\nKod jest ważny przez 10 minut.`;
+  const html = `<p>Twój kod weryfikacyjny doradcyPRO:</p><p style="font-size:24px;font-weight:700;letter-spacing:4px">${code}</p><p>Kod jest ważny przez 10 minut.</p>`;
 
   if (await sendViaBrevo({ to: email, subject, text, html })) {
     return;
