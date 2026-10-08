@@ -8,7 +8,7 @@ type Product = {
   label: string;
   description: string;
   engine: string;
-  availability: 'ACTIVE' | 'PLANNED';
+  availability: 'ACTIVE' | 'PLANNED' | 'CONFIGURATION_REQUIRED';
   requiresRegulatedPartner: boolean;
 };
 
@@ -110,10 +110,17 @@ export default function PlatformPreview() {
                 className={styles.product}
                 style={{ animationDelay: reducedMotion ? '0ms' : `${index * 70}ms` }}
                 onClick={() => choose(product)}
+                disabled={product.availability !== 'ACTIVE'}
               >
                 <span className={styles.productTop}>
                   <strong>{product.label}</strong>
-                  <em>{product.availability === 'ACTIVE' ? 'aktywne' : 'w przygotowaniu'}</em>
+                  <em>
+                    {product.availability === 'ACTIVE'
+                      ? 'aktywne'
+                      : product.availability === 'CONFIGURATION_REQUIRED'
+                        ? 'wymaga danych'
+                        : 'w przygotowaniu'}
+                  </em>
                 </span>
                 <span>{product.description}</span>
               </button>
@@ -136,8 +143,8 @@ export default function PlatformPreview() {
             <h2>{selected.label}</h2>
             <p>
               {selected.availability === 'ACTIVE'
-                ? 'Ten moduł może zostać podpięty do istniejącej infrastruktury.'
-                : 'Moduł pozostaje zablokowany produkcyjnie do czasu przejścia wymaganych gate’ów.'}
+                ? 'Ten moduł jest gotowy do wejścia w dalszy przepływ.'
+                : 'Moduł jest zablokowany produkcyjnie do czasu uzupełnienia danych lub przejścia wymaganych gate’ów.'}
             </p>
             {selected.requiresRegulatedPartner && (
               <div className={styles.gate}>REGULATORY PARTNER GATE</div>
