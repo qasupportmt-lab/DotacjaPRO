@@ -549,6 +549,12 @@ model CommerceProduct {
   priceGrossGrosz  Int?
   currency         String   @default("PLN")
   deliveryType     String   @default("DIGITAL")
+  supplyModel      String   @default("UNCLASSIFIED")
+  taxClassificationStatus String @default("PENDING")
+  vatRateBps       Int?
+  taxClassificationRef String?
+  taxReviewedAt    DateTime?
+  deliveryContractVersion String?
   metadata         Json?
   createdAt        DateTime @default(now())
   updatedAt        DateTime @updatedAt
@@ -567,6 +573,13 @@ model CommerceOrder {
   status            String   @default("PENDING_PAYMENT")
   currency          String   @default("PLN")
   amountGrossGrosz  Int
+  amountNetGrosz    Int?
+  amountVatGrosz    Int?
+  vatRateBps        Int?
+  taxClassificationRef String?
+  taxClassificationStatus String?
+  supplyModel       String?
+  deliveryContractVersion String?
   legalVersion      String
   legalAcceptanceId String
   provider          String?
