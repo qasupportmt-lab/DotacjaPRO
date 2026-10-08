@@ -1,4 +1,4 @@
-# DotacjaPRO — Legal Compliance / Checkout PL
+# doradcyPRO — Legal Compliance / Checkout PL
 
 Wersja robocza: 2026-10-03.1
 
@@ -18,7 +18,7 @@ Każdy odpłatny produkt cyfrowy / Edition musi mieć przed zakupem:
 ## Wymagane checkboxy przy płatnym produkcie cyfrowym
 
 ### A. Regulamin i licencja — obowiązkowe
-„Zapoznałem(-am) się z Regulaminem DotacjaPRO i warunkami licencji oraz akceptuję ich postanowienia.”
+„Zapoznałem(-am) się z Regulaminem doradcyPRO i warunkami licencji oraz akceptuję ich postanowienia.”
 
 ### B. Polityka prywatności — obowiązkowe potwierdzenie zapoznania
 „Potwierdzam zapoznanie się z Polityką prywatności i klauzulą informacyjną RODO.”
@@ -115,7 +115,7 @@ Nie zapisujemy IP tylko po to, by „mieć więcej dowodów”, jeśli nie jest 
 
 ## Marka a administrator danych / sprzedawca
 
-Nazwa widoczna dla użytkownika może brzmieć „DotacjaPRO Bot”.
+Nazwa widoczna dla użytkownika może brzmieć „doradcyPRO”.
 
 Nie należy jednak utożsamiać marki lub oprogramowania z administratorem danych albo stroną umowy, jeżeli nie jest ono samodzielnym podmiotem zdolnym wykonywać tych obowiązków. W API checkout pozostaje zablokowany (checkoutAllowed=false), dopóki nie zostaną skonfigurowane rzeczywiste dane operatora prawnego.
 
@@ -125,4 +125,4 @@ Minimalne wymagane dane operatora:
 - LEGAL_SELLER_EMAIL
 - LEGAL_SELLER_NIP
 
-LEGAL_BRAND_NAME może pozostać „DotacjaPRO Bot”.
+LEGAL_BRAND_NAME może pozostać „doradcyPRO”.
