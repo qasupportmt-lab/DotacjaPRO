@@ -81,10 +81,22 @@ const paymentRecordSchema = z.object({
 function paymentProviderState() {
   const provider = process.env.PAYMENT_PROVIDER?.trim().toUpperCase() || null;
   const enabled = envBoolean('PAYMENT_PROVIDER_ENABLED', false);
+  const stripeConfigured =
+    provider === 'STRIPE'
+      ? Boolean(
+          process.env.STRIPE_SECRET_KEY?.trim() &&
+          (
+            process.env.CHECKOUT_RETURN_BASE_URL?.trim() ||
+            process.env.APP_BASE_URL?.trim()
+          )
+        )
+      : true;
 
   return {
     provider,
-    configured: Boolean(provider && enabled)
+    enabled,
+    configured: Boolean(provider && enabled && stripeConfigured),
+    adapterReady: Boolean(provider && enabled && stripeConfigured)
   };
 }
 
@@ -118,6 +130,117 @@ function checkoutAcceptanceValid(metadata: unknown) {
     value.digitalImmediateConsent === true &&
     value.withdrawalAcknowledged === true
   );
+}
+
+
+type StripeCheckoutSession = {
+  id: string;
+  url?: string | null;
+  payment_status?: string | null;
+  amount_total?: number | null;
+  currency?: string | null;
+  client_reference_id?: string | null;
+  metadata?: Record<string, string>;
+  livemode?: boolean;
+  payment_intent?: string | { id?: string } | null;
+};
+
+function stripeSecret() {
+  const value = process.env.STRIPE_SECRET_KEY?.trim();
+  if (!value) {
+    throw Object.assign(new Error('STRIPE_SECRET_KEY_NOT_CONFIGURED'), {
+      statusCode: 409
+    });
+  }
+  return value;
+}
+
+function checkoutReturnBaseUrl() {
+  const value =
+    process.env.CHECKOUT_RETURN_BASE_URL?.trim() ||
+    process.env.APP_BASE_URL?.trim();
+  if (!value) {
+    throw Object.assign(new Error('CHECKOUT_RETURN_BASE_URL_NOT_CONFIGURED'), {
+      statusCode: 409
+    });
+  }
+  return value.replace(/\/$/, '');
+}
+
+async function stripeCreateCheckoutSession(input: {
+  orderId: string;
+  userId: string;
+  productName: string;
+  amountGrossGrosz: number;
+  currency: string;
+}) {
+  const body = new URLSearchParams();
+  body.set('mode', 'payment');
+  body.set('client_reference_id', input.orderId);
+  body.set('metadata[orderId]', input.orderId);
+  body.set('metadata[userId]', input.userId);
+  body.set('line_items[0][quantity]', '1');
+  body.set('line_items[0][price_data][currency]', input.currency.toLowerCase());
+  body.set('line_items[0][price_data][unit_amount]', String(input.amountGrossGrosz));
+  body.set('line_items[0][price_data][product_data][name]', input.productName);
+  body.set('automatic_payment_methods[enabled]', 'true');
+  body.set('locale', 'pl');
+
+  const base = checkoutReturnBaseUrl();
+  body.set(
+    'success_url',
+    `${base}/?checkout=success&order_id=${encodeURIComponent(input.orderId)}&session_id={CHECKOUT_SESSION_ID}`
+  );
+  body.set(
+    'cancel_url',
+    `${base}/?checkout=cancel&order_id=${encodeURIComponent(input.orderId)}`
+  );
+
+  const response = await fetch('https://api.stripe.com/v1/checkout/sessions', {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${stripeSecret()}`,
+      'Content-Type': 'application/x-www-form-urlencoded'
+    },
+    body
+  });
+
+  const payload = await response.json() as StripeCheckoutSession & {
+    error?: { message?: string; type?: string };
+  };
+
+  if (!response.ok || !payload.id || !payload.url) {
+    throw Object.assign(
+      new Error(payload.error?.message || 'STRIPE_CHECKOUT_CREATE_FAILED'),
+      { statusCode: 502 }
+    );
+  }
+
+  return payload;
+}
+
+async function stripeGetCheckoutSession(sessionId: string) {
+  const response = await fetch(
+    `https://api.stripe.com/v1/checkout/sessions/${encodeURIComponent(sessionId)}`,
+    {
+      headers: {
+        Authorization: `Bearer ${stripeSecret()}`
+      }
+    }
+  );
+
+  const payload = await response.json() as StripeCheckoutSession & {
+    error?: { message?: string; type?: string };
+  };
+
+  if (!response.ok || !payload.id) {
+    throw Object.assign(
+      new Error(payload.error?.message || 'STRIPE_SESSION_LOOKUP_FAILED'),
+      { statusCode: 502 }
+    );
+  }
+
+  return payload;
 }
 
 async function sendSaleToAccounting(
@@ -581,14 +704,176 @@ export async function registerCommerceRoutes(
       }
     });
 
-    return reply.code(201).send({
-      order,
-      checkout: {
-        provider,
-        checkoutUrl: null,
-        status: 'PROVIDER_ADAPTER_REQUIRED'
+    if (provider === 'STRIPE') {
+      try {
+        const session = await stripeCreateCheckoutSession({
+          orderId: order.id,
+          userId,
+          productName: product.name,
+          amountGrossGrosz: product.priceGrossGrosz,
+          currency: product.currency
+        });
+
+        const updatedOrder = await prisma.commerceOrder.update({
+          where: { id: order.id },
+          data: {
+            providerCheckoutId: session.id
+          },
+          include: {
+            product: {
+              select: {
+                code: true,
+                name: true,
+                deliveryType: true
+              }
+            }
+          }
+        });
+
+        return reply.code(201).send({
+          order: updatedOrder,
+          checkout: {
+            provider,
+            checkoutUrl: session.url,
+            checkoutId: session.id,
+            status: 'READY'
+          }
+        });
+      } catch (error) {
+        await prisma.commerceOrder.update({
+          where: { id: order.id },
+          data: { status: 'PAYMENT_SETUP_FAILED' }
+        });
+        throw error;
+      }
+    }
+
+    return reply.code(409).send({
+      error: 'PAYMENT_PROVIDER_ADAPTER_NOT_IMPLEMENTED',
+      provider
+    });
+  });
+
+  app.post('/v1/payments/stripe/confirm', async (request, reply) => {
+    const userId = await deps.requireUserId(request);
+    const parsed = z.object({
+      orderId: z.string().trim().min(1).max(240),
+      sessionId: z.string().trim().min(1).max(300)
+    }).safeParse(request.body);
+
+    if (!parsed.success) {
+      return reply.code(400).send({ error: 'INVALID_STRIPE_CONFIRMATION' });
+    }
+
+    const order = await prisma.commerceOrder.findFirst({
+      where: {
+        id: parsed.data.orderId,
+        userId
+      },
+      include: { product: true }
+    });
+
+    if (!order) {
+      return reply.code(404).send({ error: 'ORDER_NOT_FOUND' });
+    }
+    if (order.provider !== 'STRIPE') {
+      return reply.code(409).send({ error: 'ORDER_PROVIDER_MISMATCH' });
+    }
+    if (
+      order.providerCheckoutId &&
+      order.providerCheckoutId !== parsed.data.sessionId
+    ) {
+      return reply.code(409).send({ error: 'STRIPE_SESSION_MISMATCH' });
+    }
+
+    const session = await stripeGetCheckoutSession(parsed.data.sessionId);
+
+    if (
+      session.client_reference_id !== order.id ||
+      session.metadata?.orderId !== order.id
+    ) {
+      return reply.code(409).send({ error: 'STRIPE_ORDER_REFERENCE_MISMATCH' });
+    }
+    if ((session.currency || '').toUpperCase() !== order.currency) {
+      return reply.code(409).send({ error: 'STRIPE_CURRENCY_MISMATCH' });
+    }
+    if (session.amount_total !== order.amountGrossGrosz) {
+      return reply.code(409).send({ error: 'STRIPE_AMOUNT_MISMATCH' });
+    }
+    if (session.payment_status !== 'paid') {
+      return reply.code(409).send({
+        error: 'PAYMENT_NOT_COMPLETED',
+        paymentStatus: session.payment_status ?? null
+      });
+    }
+
+    const workerSecret = process.env.INTERNAL_WORKER_SECRET;
+    if (!workerSecret) {
+      throw Object.assign(
+        new Error('INTERNAL_WORKER_SECRET_NOT_CONFIGURED'),
+        { statusCode: 500 }
+      );
+    }
+
+    const paymentIntentId =
+      typeof session.payment_intent === 'string'
+        ? session.payment_intent
+        : session.payment_intent?.id || session.id;
+
+    const recorded = await app.inject({
+      method: 'POST',
+      url: '/v1/internal/payments/record',
+      headers: {
+        'content-type': 'application/json',
+        'x-worker-secret': workerSecret
+      },
+      payload: {
+        provider: 'STRIPE',
+        providerEventId: `checkout-confirm:${session.id}:paid`,
+        eventType: 'checkout.session.confirmed',
+        providerPaymentId: paymentIntentId,
+        orderId: order.id,
+        status: 'COMPLETED',
+        currency: order.currency,
+        amountReceivedGrosz: session.amount_total,
+        refundedGrosz: 0,
+        occurredAt: new Date().toISOString(),
+        isTest: session.livemode === false,
+        metadata: {
+          stripeSessionId: session.id,
+          confirmationMode: 'server_verified_return'
+        }
       }
     });
+
+    const body = recorded.json();
+    if (recorded.statusCode >= 400) {
+      return reply.code(recorded.statusCode).send(body);
+    }
+
+    const entitlement = await prisma.entitlement.findFirst({
+      where: {
+        userId,
+        orderId: order.id,
+        status: 'ACTIVE'
+      },
+      include: {
+        product: {
+          select: {
+            code: true,
+            name: true,
+            deliveryType: true
+          }
+        }
+      }
+    });
+
+    return {
+      status: 'PAID',
+      orderId: order.id,
+      entitlement,
+      paymentRecord: body
+    };
   });
 
   app.get('/v1/admin/commerce/access', async (request) => {
