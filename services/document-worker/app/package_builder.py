@@ -29,7 +29,7 @@ def _instruction_lines(payload: dict[str, Any]) -> list[str]:
     }
 
     lines = [
-        "DORADCYPRO — INSTRUKCJA ZŁOŻENIA DOKUMENTÓW",
+        "doradcyPRO — INSTRUKCJA ZŁOŻENIA DOKUMENTÓW",
         "",
         f"Nabór: {call.get('title') or ''}",
         f"Instytucja: {instruction.get('institutionName') or call.get('institutionName') or ''}",
