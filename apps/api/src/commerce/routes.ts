@@ -905,6 +905,27 @@ export async function registerCommerceRoutes(
     });
 
     if (provider === 'STRIPE') {
+      const stripeMetadata = readStripeProductMetadata(product.metadata);
+
+      if (
+        stripePaymentLinkModeEnabled() &&
+        stripeMetadata.paymentLinkUrl
+      ) {
+        const checkoutUrl = new URL(stripeMetadata.paymentLinkUrl);
+        checkoutUrl.searchParams.set('client_reference_id', order.id);
+
+        return reply.code(201).send({
+          order,
+          checkout: {
+            provider,
+            checkoutUrl: checkoutUrl.toString(),
+            checkoutId: stripeMetadata.paymentLinkId,
+            status: 'READY',
+            mode: 'PAYMENT_LINK'
+          }
+        });
+      }
+
       try {
         const session = await stripeCreateCheckoutSession({
           orderId: order.id,
@@ -936,7 +957,8 @@ export async function registerCommerceRoutes(
             provider,
             checkoutUrl: session.url,
             checkoutId: session.id,
-            status: 'READY'
+            status: 'READY',
+            mode: 'CHECKOUT_SESSION'
           }
         });
       } catch (error) {
