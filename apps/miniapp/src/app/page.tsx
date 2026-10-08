@@ -1436,14 +1436,14 @@ export default function Home() {
   return (
     <main className="shell">
       <section className="brand">
-        <span className="eyebrow">DORADCAPRO</span>
+        <span className="eyebrow">DORADCYPRO</span>
         <h1>Twoja droga do finansowania firmy</h1>
         <p>Ustalimy Twój region i sytuację, dopasujemy programy, a dokumenty przygotujemy wyłącznie na aktualnych, oficjalnych formularzach.</p>
       </section>
 
       {token && (
         <section className="session-toolbar">
-          <span>{authChannel === 'telegram' ? 'Połączono przez MT' : 'Zalogowano do DoradcaPRO'}</span>
+          <span>{authChannel === 'telegram' ? 'Połączono przez MT' : 'Zalogowano do doradcyPRO'}</span>
           <button className="secondary compact" onClick={logout}>
             Wyloguj
           </button>
@@ -1653,9 +1653,9 @@ export default function Home() {
         </div>
 
         {step === 'welcome' && <>
-          <h2>Zaloguj się do DoradcaPRO</h2>
+          <h2>Zaloguj się do doradcyPRO</h2>
           <p>
-            Konto DoradcaPRO działa w Safari, Chrome i innych nowoczesnych przeglądarkach.
+            Konto doradcyPRO działa w Safari, Chrome i innych nowoczesnych przeglądarkach.
           </p>
 
           <div className="auth-tabs">
@@ -1720,7 +1720,7 @@ export default function Home() {
                   onChange={(e) => setLegalTermsAccepted(e.target.checked)}
                 />
                 <span>
-                  Akceptuję <a href="/legal" target="_blank" rel="noreferrer">Regulamin DoradcaPRO</a>.
+                  Akceptuję <a href="/legal" target="_blank" rel="noreferrer">Regulamin doradcyPRO</a>.
                 </span>
               </label>
               <label className="legal-check">
@@ -1801,7 +1801,7 @@ export default function Home() {
                 onChange={(e) => setLegalTermsAccepted(e.target.checked)}
               />
               <span>
-                Akceptuję <a href="/legal" target="_blank" rel="noreferrer">Regulamin DoradcaPRO</a>.
+                Akceptuję <a href="/legal" target="_blank" rel="noreferrer">Regulamin doradcyPRO</a>.
               </span>
             </label>
             <label className="legal-check">
@@ -1963,7 +1963,7 @@ export default function Home() {
                       <p>{candidate.reason}</p>
                       <p className="call-meta">
                         {candidate.requiresVerifiedCall
-                          ? 'DoradcaPRO pokaże konkretny nabór dopiero po weryfikacji jego oficjalnych zasad.'
+                          ? 'doradcyPRO pokaże konkretny nabór dopiero po weryfikacji jego oficjalnych zasad.'
                           : 'Warunki tej ścieżki są weryfikowane przed przedstawieniem konkretnej oferty.'}
                       </p>
                       {candidate.program?.officialUrl && (
@@ -2235,7 +2235,7 @@ export default function Home() {
 
                         {officialForms.length === 0 ? (
                           <p className="muted-box">
-                            Nie ma jeszcze zweryfikowanego mapowania formularza dla tego naboru. DoradcaPRO nie utworzy własnego zamiennika.
+                            Nie ma jeszcze zweryfikowanego mapowania formularza dla tego naboru. doradcyPRO nie utworzy własnego zamiennika.
                           </p>
                         ) : (
                           <div className="forms-list">
@@ -2358,7 +2358,7 @@ export default function Home() {
                                           </p>
                                         )}
                                         {['QUEUED', 'PROCESSING'].includes(renderJob.status) && (
-                                          <p>DoradcaPRO wypełnia kopię aktualnego formularza urzędowego.</p>
+                                          <p>doradcyPRO wypełnia kopię aktualnego formularza urzędowego.</p>
                                         )}
                                       </div>
                                     )}
@@ -2373,7 +2373,7 @@ export default function Home() {
                       <div className="package-panel">
                         <h3>Gotowy komplet</h3>
                         <p>
-                          DoradcaPRO wyśle ZIP z wymaganymi formularzami, instrukcją do wydruku
+                          doradcyPRO wyśle ZIP z wymaganymi formularzami, instrukcją do wydruku
                           i manifestem wersji dokumentów na Twój zweryfikowany e-mail.
                         </p>
                         <button
