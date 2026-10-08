@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useMemo, useState } from 'react';
+import ProductGateway, { type PlatformProduct } from './components/ProductGateway';
 
 declare global {
   interface Window {
@@ -21,7 +22,7 @@ const VOIVODESHIPS = [
   'świętokrzyskie','warmińsko-mazurskie','wielkopolskie','zachodniopomorskie'
 ];
 
-type Step = 'welcome' | 'legal' | 'region' | 'email' | 'employment' | 'business' | 'done';
+type Step = 'welcome' | 'legal' | 'gateway' | 'region' | 'email' | 'employment' | 'business' | 'done';
 
 type LocalCriteriaSet = {
   id: string;
@@ -488,7 +489,7 @@ export default function Home() {
       if (data.legalVersion) setLegalVersion(data.legalVersion);
       setStep('legal');
     } else {
-      setStep('region');
+      setStep('gateway');
     }
   }
 
@@ -528,7 +529,7 @@ export default function Home() {
         throw new Error('Nie udało się zapisać akceptacji aktualnych warunków.');
       }
 
-      setStep('region');
+      setStep('gateway');
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Błąd zapisu zgód');
     } finally {
@@ -585,7 +586,7 @@ export default function Home() {
         if (data.legalVersion) setLegalVersion(data.legalVersion);
         setStep('legal');
       } else {
-        setStep('region');
+        setStep('gateway');
       }
     } catch {
       window.localStorage.removeItem('dotacjapro.session');
@@ -1329,6 +1330,17 @@ export default function Home() {
     }
   }
 
+  function selectPlatformProduct(product: PlatformProduct) {
+    if (product.availability !== 'ACTIVE') return;
+
+    if (product.code === 'GRANTS' || product.code === 'DOCUMENTS') {
+      setStep('region');
+      return;
+    }
+
+    setError('Ten moduł nie jest jeszcze aktywny produkcyjnie.');
+  }
+
   async function startCase() {
     if (!token) return;
     setBusy(true);
@@ -1425,6 +1437,7 @@ export default function Home() {
   const progressed: Record<Step, number> = {
     welcome: 0,
     legal: 0,
+    gateway: 0,
     region: 1,
     email: 2,
     employment: 3,
@@ -1647,7 +1660,11 @@ export default function Home() {
         </section>
       )}
 
-      <section className="card">
+      {step === 'gateway' && token && (
+        <ProductGateway apiBaseUrl={API} onSelect={selectPlatformProduct} />
+      )}
+
+      <section className={step === 'gateway' ? 'card hidden-card' : 'card'}>
         <div className="progress">
           {[1,2,3,4,5].map((n) => <span key={n} className={progressValue >= n ? 'active' : ''}></span>)}
         </div>
