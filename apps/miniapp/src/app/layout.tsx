@@ -1,7 +1,7 @@
 import './globals.css';
 
 export const metadata = {
-  title: 'DoradcaPRO',
+  title: 'doradcyPRO',
   description: 'Cyfrowy doradca finansowania działalności gospodarczej'
 };
 
