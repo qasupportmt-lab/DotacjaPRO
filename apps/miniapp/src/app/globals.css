@@ -321,3 +321,65 @@ button:disabled { opacity: .45; cursor: default; }
   .gateway-grid { grid-template-columns: 1fr; margin-top: 28px; }
   .gateway-copy h2 { font-size: 42px; }
 }
+
+
+/* doradcyPRO commerce / Stripe checkout */
+.commerce-panel {
+  margin-top: 28px;
+  padding: 22px;
+  border: 1px solid rgba(126,242,167,.22);
+  border-radius: 22px;
+  background: linear-gradient(145deg, rgba(126,242,167,.05), rgba(255,255,255,.025));
+}
+.commerce-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 18px;
+}
+.commerce-head h2 { margin: 6px 0 0; }
+.commerce-products {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0,1fr));
+  gap: 12px;
+}
+.commerce-product {
+  display: grid;
+  gap: 14px;
+  align-content: start;
+  padding: 16px;
+  border: 1px solid rgba(255,255,255,.08);
+  border-radius: 16px;
+  background: rgba(255,255,255,.035);
+}
+.commerce-product p {
+  margin: 7px 0 0;
+  font-size: 13px;
+  line-height: 1.45;
+}
+.commerce-price {
+  color: var(--accent);
+  font-size: 22px;
+  font-weight: 900;
+  letter-spacing: -.03em;
+}
+.checkout-consents {
+  display: grid;
+  gap: 10px;
+  margin-top: 18px;
+  padding: 15px;
+  border-radius: 15px;
+  background: rgba(255,255,255,.025);
+}
+.commerce-order-state {
+  margin-bottom: 16px;
+  padding: 14px;
+  border: 1px solid rgba(126,242,167,.18);
+  border-radius: 14px;
+  background: rgba(126,242,167,.055);
+}
+@media (max-width: 760px) {
+  .commerce-head { display: grid; }
+  .commerce-products { grid-template-columns: 1fr; }
+}
