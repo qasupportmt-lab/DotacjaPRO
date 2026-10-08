@@ -236,22 +236,35 @@ const paymentRecordSchema = z.object({
 function paymentProviderState() {
   const provider = process.env.PAYMENT_PROVIDER?.trim().toUpperCase() || null;
   const enabled = envBoolean('PAYMENT_PROVIDER_ENABLED', false);
+  const dynamicCheckoutReady = Boolean(
+    process.env.STRIPE_SECRET_KEY?.trim() &&
+    (
+      process.env.CHECKOUT_RETURN_BASE_URL?.trim() ||
+      process.env.APP_BASE_URL?.trim()
+    )
+  );
+  const paymentLinkReady = Boolean(
+    stripePaymentLinkModeEnabled() &&
+    process.env.STRIPE_WEBHOOK_SECRET?.trim()
+  );
   const stripeConfigured =
     provider === 'STRIPE'
-      ? Boolean(
-          process.env.STRIPE_SECRET_KEY?.trim() &&
-          (
-            process.env.CHECKOUT_RETURN_BASE_URL?.trim() ||
-            process.env.APP_BASE_URL?.trim()
-          )
-        )
+      ? dynamicCheckoutReady || paymentLinkReady
       : true;
 
   return {
     provider,
     enabled,
     configured: Boolean(provider && enabled && stripeConfigured),
-    adapterReady: Boolean(provider && enabled && stripeConfigured)
+    adapterReady: Boolean(provider && enabled && stripeConfigured),
+    stripeMode:
+      provider === 'STRIPE'
+        ? dynamicCheckoutReady
+          ? 'CHECKOUT_SESSIONS'
+          : paymentLinkReady
+            ? 'PAYMENT_LINKS'
+            : 'NOT_READY'
+        : null
   };
 }
 
