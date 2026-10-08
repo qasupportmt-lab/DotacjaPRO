@@ -5,6 +5,7 @@ import { prisma } from '@dotacjapro/db';
 import { LEGAL_VERSION } from '../legal/policy.js';
 import { envBoolean, getLegalOperatorState } from '../legal/operator.js';
 import { generateAccessKey, hashAccessKey } from './access-keys.js';
+import { sendProductAccessEmail } from '../email/mailer.js';
 
 type CommerceRouteDeps = {
   requireWorkerSecret: (request: FastifyRequest) => void;
@@ -422,6 +423,156 @@ async function stripeGetCheckoutSession(sessionId: string) {
   return payload;
 }
 
+async function deliverPaidDigitalAccess(
+  app: FastifyInstance,
+  orderId: string
+) {
+  const entitlement = await prisma.entitlement.findFirst({
+    where: {
+      orderId,
+      status: 'ACTIVE'
+    },
+    include: {
+      user: {
+        select: {
+          email: true,
+          emailVerifiedAt: true
+        }
+      },
+      product: {
+        select: {
+          code: true,
+          name: true,
+          deliveryType: true
+        }
+      },
+      redemptionTokens: {
+        where: {
+          status: { in: ['ISSUED', 'REDEEMED'] }
+        },
+        orderBy: { issuedAt: 'desc' },
+        take: 1
+      }
+    }
+  });
+
+  if (!entitlement) {
+    throw new Error('PAID_ENTITLEMENT_NOT_FOUND');
+  }
+
+  if (!['DIGITAL', 'HYBRID'].includes(entitlement.product.deliveryType)) {
+    return { delivered: false, reason: 'NON_DIGITAL_PRODUCT' };
+  }
+
+  if (!entitlement.user.email || !entitlement.user.emailVerifiedAt) {
+    throw new Error('VERIFIED_EMAIL_REQUIRED_FOR_DIGITAL_DELIVERY');
+  }
+
+  const existingToken = entitlement.redemptionTokens[0] ?? null;
+  if (existingToken) {
+    const delivered = await prisma.auditEvent.findFirst({
+      where: {
+        userId: entitlement.userId,
+        action: 'PRODUCT_ACCESS_KEY_DELIVERED',
+        entity: 'AccessRedemptionToken',
+        entityId: existingToken.id
+      },
+      select: { id: true }
+    });
+
+    if (delivered || existingToken.status === 'REDEEMED') {
+      return {
+        delivered: true,
+        idempotent: true,
+        entitlementId: entitlement.id
+      };
+    }
+
+    await prisma.accessRedemptionToken.updateMany({
+      where: {
+        id: existingToken.id,
+        status: 'ISSUED'
+      },
+      data: {
+        status: 'REVOKED',
+        revokedAt: new Date()
+      }
+    });
+  }
+
+  const workerSecret = process.env.INTERNAL_WORKER_SECRET;
+  if (!workerSecret) {
+    throw new Error('INTERNAL_WORKER_SECRET_NOT_CONFIGURED');
+  }
+
+  const issuedResponse = await app.inject({
+    method: 'POST',
+    url: '/v1/internal/access-keys/issue',
+    headers: {
+      'content-type': 'application/json',
+      'x-worker-secret': workerSecret
+    },
+    payload: {
+      entitlementId: entitlement.id,
+      purpose: 'PRODUCT_ACCESS'
+    }
+  });
+
+  if (issuedResponse.statusCode >= 400) {
+    throw new Error(
+      `ACCESS_KEY_ISSUE_FAILED_${issuedResponse.statusCode}`
+    );
+  }
+
+  const issued = issuedResponse.json() as {
+    token: { id: string };
+    accessKey: string;
+  };
+
+  try {
+    await sendProductAccessEmail({
+      email: entitlement.user.email,
+      productName: entitlement.product.name,
+      accessKey: issued.accessKey,
+      entitlementId: entitlement.id,
+      appUrl: checkoutReturnBaseUrl()
+    });
+
+    await prisma.auditEvent.create({
+      data: {
+        userId: entitlement.userId,
+        actorType: 'SYSTEM',
+        action: 'PRODUCT_ACCESS_KEY_DELIVERED',
+        entity: 'AccessRedemptionToken',
+        entityId: issued.token.id,
+        metadata: {
+          entitlementId: entitlement.id,
+          productCode: entitlement.product.code,
+          deliveryChannel: 'EMAIL'
+        }
+      }
+    });
+  } catch (error) {
+    await prisma.accessRedemptionToken.updateMany({
+      where: {
+        id: issued.token.id,
+        status: 'ISSUED'
+      },
+      data: {
+        status: 'REVOKED',
+        revokedAt: new Date()
+      }
+    });
+    throw error;
+  }
+
+  return {
+    delivered: true,
+    idempotent: false,
+    entitlementId: entitlement.id
+  };
+}
+
 async function sendSaleToAccounting(
   app: FastifyInstance,
   input: {
@@ -822,15 +973,32 @@ export async function registerCommerceRoutes(
       });
     }
 
-    const product = await prisma.commerceProduct.findUnique({
-      where: { code: parsed.data.productCode }
-    });
+    const [product, buyer] = await Promise.all([
+      prisma.commerceProduct.findUnique({
+        where: { code: parsed.data.productCode }
+      }),
+      prisma.user.findUnique({
+        where: { id: userId },
+        select: {
+          email: true,
+          emailVerifiedAt: true
+        }
+      })
+    ]);
 
     if (!product || !product.active) {
       return reply.code(404).send({ error: 'PRODUCT_NOT_AVAILABLE' });
     }
     if (product.priceGrossGrosz === null) {
       return reply.code(409).send({ error: 'PRODUCT_PRICE_NOT_CONFIGURED' });
+    }
+    if (
+      ['DIGITAL', 'HYBRID'].includes(product.deliveryType) &&
+      (!buyer?.email || !buyer.emailVerifiedAt)
+    ) {
+      return reply.code(409).send({
+        error: 'VERIFIED_EMAIL_REQUIRED_FOR_DIGITAL_DELIVERY'
+      });
     }
     if (
       !['CONFIRMED', 'WIS_CONFIRMED'].includes(product.taxClassificationStatus) ||
