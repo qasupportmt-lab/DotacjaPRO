@@ -142,7 +142,7 @@ def legal_pack_text() -> str:
         else ""
     )
 
-    return f"""DORADCYPRO — WARUNKI KORZYSTANIA, LICENCJA, INFORMACJA PRAWNA I RODO
+    return f"""doradcyPRO — WARUNKI KORZYSTANIA, LICENCJA, INFORMACJA PRAWNA I RODO
 Wersja: {LEGAL_VERSION}
 
 MARKA / USŁUGA
