@@ -20,7 +20,7 @@ export async function registerSupervisorRoutes(app: FastifyInstance, deps: Deps)
       data: {
         actorType: 'SYSTEM',
         action: 'APP_ACTIVITY',
-        entity: 'DORADCAPRO',
+        entity: 'DORADCYPRO',
         metadata: { action }
       }
     });
