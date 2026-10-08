@@ -38,7 +38,8 @@ const orderSchema = z.object({
 const accessKeyIssueSchema = z.object({
   entitlementId: z.string().trim().min(1).max(240),
   expiresInHours: z.number().int().min(1).max(24 * 90).default(24 * 30),
-  purpose: z.string().trim().min(1).max(80).default('PRODUCT_ACCESS')
+  purpose: z.string().trim().min(1).max(80).default('PRODUCT_ACCESS'),
+  rotate: z.boolean().default(false)
 });
 
 const accessKeyRedeemSchema = z.object({
@@ -318,16 +319,38 @@ export async function registerCommerceRoutes(
     const tokenHash = hashAccessKey(accessKey);
 
     const issued = await prisma.$transaction(async (tx) => {
-      await tx.accessRedemptionToken.updateMany({
+      await tx.$queryRaw<Array<{ id: string }>>`
+        SELECT "id"
+        FROM "Entitlement"
+        WHERE "id" = ${entitlement.id}
+        FOR UPDATE
+      `;
+
+      const existing = await tx.accessRedemptionToken.findFirst({
         where: {
           entitlementId: entitlement.id,
-          status: 'ISSUED'
+          status: 'ISSUED',
+          expiresAt: { gt: now }
         },
-        data: {
-          status: 'REVOKED',
-          revokedAt: now
-        }
+        select: { id: true }
       });
+
+      if (existing && !parsed.data.rotate) {
+        return { conflict: true as const, token: null };
+      }
+
+      if (existing && parsed.data.rotate) {
+        await tx.accessRedemptionToken.updateMany({
+          where: {
+            entitlementId: entitlement.id,
+            status: 'ISSUED'
+          },
+          data: {
+            status: 'REVOKED',
+            revokedAt: now
+          }
+        });
+      }
 
       const token = await tx.accessRedemptionToken.create({
         data: {
@@ -366,15 +389,23 @@ export async function registerCommerceRoutes(
         }
       });
 
-      return token;
+      return { conflict: false as const, token };
     });
 
+    if (issued.conflict) {
+      return reply.code(409).send({
+        error: 'ACCESS_KEY_ALREADY_ISSUED',
+        hint: 'Set rotate=true only for an intentional key rotation.'
+      });
+    }
+
     return {
-      token: issued,
+      token: issued.token,
       accessKey,
       security: {
         plaintextStored: false,
-        singleUse: true
+        singleUse: true,
+        rotationRequiredForReplacement: true
       }
     };
   });
@@ -423,15 +454,22 @@ export async function registerCommerceRoutes(
     }
 
     const now = new Date();
-    await prisma.$transaction([
-      prisma.accessRedemptionToken.update({
-        where: { id: token.id },
+    const redeemed = await prisma.$transaction(async (tx) => {
+      const updated = await tx.accessRedemptionToken.updateMany({
+        where: {
+          id: token.id,
+          status: 'ISSUED',
+          expiresAt: { gt: now }
+        },
         data: {
           status: 'REDEEMED',
           redeemedAt: now
         }
-      }),
-      prisma.auditEvent.create({
+      });
+
+      if (updated.count !== 1) return false;
+
+      await tx.auditEvent.create({
         data: {
           userId,
           actorType: 'USER',
@@ -444,8 +482,14 @@ export async function registerCommerceRoutes(
             purpose: token.purpose
           }
         }
-      })
-    ]);
+      });
+
+      return true;
+    });
+
+    if (!redeemed) {
+      return reply.code(409).send({ error: 'ACCESS_KEY_NOT_ACTIVE' });
+    }
 
     return {
       status: 'REDEEMED',
