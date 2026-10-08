@@ -354,6 +354,73 @@ export default function Home() {
     }
   }, []);
 
+
+  useEffect(() => {
+    if (!token) return;
+
+    void loadCommerceCatalog();
+
+    const params = new URLSearchParams(window.location.search);
+    const checkoutState = params.get('checkout');
+    const pendingOrderId =
+      params.get('order_id') ||
+      window.localStorage.getItem('doradcypro.pendingOrderId');
+
+    if (checkoutState === 'cancel') {
+      setCheckoutMessage('Płatność została anulowana. Zamówienie nie zostało opłacone.');
+      window.localStorage.removeItem('doradcypro.pendingOrderId');
+      return;
+    }
+
+    if (checkoutState !== 'success' || !pendingOrderId) return;
+
+    setCheckoutMessage('Płatność wróciła ze Stripe. Czekam na podpisane potwierdzenie webhooka…');
+
+    let attempts = 0;
+    const poll = async () => {
+      attempts += 1;
+      const order = await loadCommerceOrder(pendingOrderId);
+      if (order?.status === 'PAID') {
+        setCheckoutMessage('Płatność potwierdzona. Dostęp został aktywowany.');
+        window.localStorage.removeItem('doradcypro.pendingOrderId');
+        const cleanUrl = new URL(window.location.href);
+        cleanUrl.searchParams.delete('checkout');
+        cleanUrl.searchParams.delete('order_id');
+        cleanUrl.searchParams.delete('session_id');
+        window.history.replaceState({}, '', cleanUrl.toString());
+        return true;
+      }
+
+      if (order?.status === 'REFUNDED' || order?.status === 'CANCELLED') {
+        setCheckoutMessage(
+          order.status === 'REFUNDED'
+            ? 'Płatność została zwrócona.'
+            : 'Zamówienie zostało anulowane.'
+        );
+        window.localStorage.removeItem('doradcypro.pendingOrderId');
+        return true;
+      }
+
+      return false;
+    };
+
+    void poll();
+
+    const timer = window.setInterval(async () => {
+      const done = await poll();
+      if (done || attempts >= 12) {
+        window.clearInterval(timer);
+        if (!done) {
+          setCheckoutMessage(
+            'Stripe przyjął powrót z płatności, ale potwierdzenie serwerowe jeszcze nie dotarło. Odśwież status za chwilę.'
+          );
+        }
+      }
+    }, 2500);
+
+    return () => window.clearInterval(timer);
+  }, [token]);
+
   useEffect(() => {
     if (
       !caseId ||
@@ -499,6 +566,150 @@ export default function Home() {
       controller.abort();
     };
   }, [step, region.voivodeship, region.city]);
+
+  function formatPriceGrosz(value: number, currency = 'PLN') {
+    return new Intl.NumberFormat('pl-PL', {
+      style: 'currency',
+      currency
+    }).format(value / 100);
+  }
+
+  async function loadCommerceCatalog() {
+    try {
+      const [productsResponse, readinessResponse] = await Promise.all([
+        fetch(`${API}/v1/products`, { cache: 'no-store' }),
+        fetch(`${API}/v1/checkout/readiness`, { cache: 'no-store' })
+      ]);
+
+      if (productsResponse.ok) {
+        const productsData = await productsResponse.json();
+        setCommerceProducts(
+          Array.isArray(productsData?.products) ? productsData.products : []
+        );
+      }
+
+      if (readinessResponse.ok) {
+        setCheckoutReadiness(await readinessResponse.json());
+      }
+    } catch {
+      setCheckoutReadiness({
+        ready: false,
+        blockedReason: 'CHECKOUT_UNAVAILABLE'
+      });
+    }
+  }
+
+  async function loadCommerceOrder(orderId: string) {
+    if (!token) return null;
+
+    try {
+      const response = await fetch(
+        `${API}/v1/me/orders/${encodeURIComponent(orderId)}`,
+        { headers: authHeaders }
+      );
+
+      if (!response.ok) return null;
+      const data = await response.json();
+      const order = data.order as CommerceOrderStatusView;
+      setCheckoutOrder(order);
+      return order;
+    } catch {
+      return null;
+    }
+  }
+
+  async function startProductCheckout(product: CommerceProductView) {
+    if (!token || !legalVersion) return;
+
+    if (!checkoutReadiness?.ready) {
+      setCheckoutMessage('Płatności dla tego produktu nie są jeszcze aktywne.');
+      return;
+    }
+
+    if (!checkoutImmediateConsent || !checkoutWithdrawalAcknowledged) {
+      setCheckoutMessage(
+        'Przed płatnością potwierdź natychmiastowe rozpoczęcie dostarczania treści cyfrowej i informację o prawie odstąpienia.'
+      );
+      return;
+    }
+
+    setCheckoutBusyCode(product.code);
+    setCheckoutMessage(null);
+    setError(null);
+
+    try {
+      const acceptanceResponse = await fetch(
+        `${API}/v1/me/legal-acceptances`,
+        {
+          method: 'POST',
+          headers: authHeaders,
+          body: JSON.stringify({
+            version: legalVersion,
+            termsAccepted: true,
+            licenseAccepted: true,
+            privacyAcknowledged: true,
+            digitalImmediateConsent: true,
+            withdrawalAcknowledged: true,
+            context: 'CHECKOUT',
+            purchaseReference: product.code
+          })
+        }
+      );
+
+      const acceptanceData = await acceptanceResponse.json().catch(() => ({}));
+      if (!acceptanceResponse.ok || !acceptanceData.acceptanceId) {
+        throw new Error(
+          acceptanceData.error === 'DIGITAL_CONTENT_CONSENT_REQUIRED'
+            ? 'Brak wymaganych zgód dla treści cyfrowej.'
+            : 'Nie udało się zapisać zgód dla zakupu.'
+        );
+      }
+
+      const orderResponse = await fetch(`${API}/v1/orders`, {
+        method: 'POST',
+        headers: authHeaders,
+        body: JSON.stringify({
+          productCode: product.code,
+          legalAcceptanceId: acceptanceData.acceptanceId
+        })
+      });
+
+      const orderData = await orderResponse.json().catch(() => ({}));
+      if (!orderResponse.ok) {
+        if (orderData.error === 'VERIFIED_EMAIL_REQUIRED_FOR_DIGITAL_DELIVERY') {
+          throw new Error(
+            'Przed zakupem produktu cyfrowego zweryfikuj adres e-mail na koncie.'
+          );
+        }
+        if (orderData.error === 'PRODUCT_TAX_OR_DELIVERY_CLASSIFICATION_REQUIRED') {
+          throw new Error(
+            'Ten produkt nie przeszedł jeszcze pełnej klasyfikacji podatkowej i dostawy.'
+          );
+        }
+        throw new Error(
+          orderData.blockedReason
+            ? `Płatność jest chwilowo zablokowana: ${orderData.blockedReason}`
+            : 'Nie udało się utworzyć płatności.'
+        );
+      }
+
+      const orderId = orderData.order?.id;
+      const checkoutUrl = orderData.checkout?.checkoutUrl;
+
+      if (!orderId || !checkoutUrl) {
+        throw new Error('Stripe nie zwrócił gotowego adresu płatności.');
+      }
+
+      window.localStorage.setItem('doradcypro.pendingOrderId', orderId);
+      window.location.assign(checkoutUrl);
+    } catch (e) {
+      setCheckoutMessage(
+        e instanceof Error ? e.message : 'Nie udało się rozpocząć płatności.'
+      );
+    } finally {
+      setCheckoutBusyCode(null);
+    }
+  }
 
   async function loadCurrentLegal() {
     try {
