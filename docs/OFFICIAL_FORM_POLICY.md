@@ -2,7 +2,7 @@
 
 ## Reguła bezwzględna
 
-DotacjaPRO nie generuje własnego dokumentu zastępującego formularz urzędu, jeśli dana instytucja udostępnia dedykowany wzór.
+doradcyPRO nie generuje własnego dokumentu zastępującego formularz urzędu, jeśli dana instytucja udostępnia dedykowany wzór.
 
 ## Proces
 
