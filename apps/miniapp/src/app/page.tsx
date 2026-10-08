@@ -1448,11 +1448,13 @@ export default function Home() {
 
   return (
     <main className="shell">
-      <section className="brand">
-        <span className="eyebrow">DORADCYPRO</span>
-        <h1>Twoja droga do finansowania firmy</h1>
-        <p>Ustalimy Twój region i sytuację, dopasujemy programy, a dokumenty przygotujemy wyłącznie na aktualnych, oficjalnych formularzach.</p>
-      </section>
+      {step !== 'gateway' && (
+        <section className="brand">
+          <span className="eyebrow">doradcyPRO</span>
+          <h1>Twoja droga do finansowania firmy</h1>
+          <p>Ustalimy Twój region i sytuację, dopasujemy programy, a dokumenty przygotujemy wyłącznie na aktualnych, oficjalnych formularzach.</p>
+        </section>
+      )}
 
       {token && (
         <section className="session-toolbar">
