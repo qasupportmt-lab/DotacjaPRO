@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import type { FastifyInstance, FastifyRequest } from 'fastify';
 import { z } from 'zod';
 import { prisma } from '@dotacjapro/db';
@@ -704,8 +705,7 @@ export async function registerCommerceRoutes(
     }
 
     const input = parsed.data;
-    const payloadSha256 = crypto
-      .createHash('sha256')
+    const payloadSha256 = createHash('sha256')
       .update(JSON.stringify(input))
       .digest('hex');
 
