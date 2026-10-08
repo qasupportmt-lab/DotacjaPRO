@@ -198,7 +198,7 @@ export async function registerPlatformRoutes(
         readyForGrantRouting: missing.length === 0 && profile.location.regionVerified
       },
       provenance: {
-        source: 'DORADCYPRO_ACCOUNT',
+        source: 'DORADCAPRO_ACCOUNT',
         assembledAt: new Date().toISOString(),
         writeModel: 'ASK_ONCE_REUSE_WITH_CONSENT'
       }
