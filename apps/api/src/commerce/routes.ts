@@ -20,6 +20,23 @@ const productSchema = z.object({
   priceGrossGrosz: z.number().int().min(0).max(2_000_000_000).nullable(),
   currency: z.literal('PLN').default('PLN'),
   deliveryType: z.enum(['DIGITAL', 'SERVICE', 'HYBRID']).default('DIGITAL'),
+  supplyModel: z.enum([
+    'UNCLASSIFIED',
+    'PUBLICATION_ONLY',
+    'PUBLICATION_WITH_INTEGRAL_DIGITAL_COMPONENT',
+    'DIGITAL_SERVICE',
+    'HYBRID'
+  ]).default('UNCLASSIFIED'),
+  taxClassificationStatus: z.enum([
+    'PENDING',
+    'CONFIRMED',
+    'WIS_CONFIRMED',
+    'REJECTED'
+  ]).default('PENDING'),
+  vatRateBps: z.number().int().min(0).max(2300).nullable().optional(),
+  taxClassificationRef: z.string().trim().max(500).nullable().optional(),
+  taxReviewedAt: z.string().datetime().nullable().optional(),
+  deliveryContractVersion: z.string().trim().max(120).nullable().optional(),
   metadata: z.record(z.string(), z.unknown()).optional()
 }).superRefine((value, ctx) => {
   if (value.active && value.priceGrossGrosz === null) {
@@ -27,6 +44,41 @@ const productSchema = z.object({
       code: 'custom',
       path: ['priceGrossGrosz'],
       message: 'An active paid product must have a configured price'
+    });
+  }
+
+  if (
+    value.active &&
+    !['CONFIRMED', 'WIS_CONFIRMED'].includes(value.taxClassificationStatus)
+  ) {
+    ctx.addIssue({
+      code: 'custom',
+      path: ['taxClassificationStatus'],
+      message: 'Active product requires confirmed tax classification'
+    });
+  }
+
+  if (value.active && value.vatRateBps == null) {
+    ctx.addIssue({
+      code: 'custom',
+      path: ['vatRateBps'],
+      message: 'Active product requires VAT rate snapshot'
+    });
+  }
+
+  if (value.active && value.supplyModel === 'UNCLASSIFIED') {
+    ctx.addIssue({
+      code: 'custom',
+      path: ['supplyModel'],
+      message: 'Active product requires supply model classification'
+    });
+  }
+
+  if (value.active && !value.deliveryContractVersion) {
+    ctx.addIssue({
+      code: 'custom',
+      path: ['deliveryContractVersion'],
+      message: 'Active product requires delivery contract version'
     });
   }
 });
@@ -114,6 +166,16 @@ function checkoutReadiness() {
     blockedReason,
     legal,
     payment
+  };
+}
+
+function calculateTaxFromGross(amountGrossGrosz: number, vatRateBps: number) {
+  const amountNetGrosz = Math.round(
+    amountGrossGrosz * 10_000 / (10_000 + vatRateBps)
+  );
+  return {
+    amountNetGrosz,
+    amountVatGrosz: amountGrossGrosz - amountNetGrosz
   };
 }
 
@@ -653,6 +715,21 @@ export async function registerCommerceRoutes(
     if (product.priceGrossGrosz === null) {
       return reply.code(409).send({ error: 'PRODUCT_PRICE_NOT_CONFIGURED' });
     }
+    if (
+      !['CONFIRMED', 'WIS_CONFIRMED'].includes(product.taxClassificationStatus) ||
+      product.vatRateBps === null ||
+      product.supplyModel === 'UNCLASSIFIED' ||
+      !product.deliveryContractVersion
+    ) {
+      return reply.code(409).send({
+        error: 'PRODUCT_TAX_OR_DELIVERY_CLASSIFICATION_REQUIRED'
+      });
+    }
+
+    const tax = calculateTaxFromGross(
+      product.priceGrossGrosz,
+      product.vatRateBps
+    );
 
     const acceptance = await prisma.auditEvent.findFirst({
       where: {
@@ -689,6 +766,13 @@ export async function registerCommerceRoutes(
         status: 'PENDING_PAYMENT',
         currency: product.currency,
         amountGrossGrosz: product.priceGrossGrosz,
+        amountNetGrosz: tax.amountNetGrosz,
+        amountVatGrosz: tax.amountVatGrosz,
+        vatRateBps: product.vatRateBps,
+        taxClassificationRef: product.taxClassificationRef,
+        taxClassificationStatus: product.taxClassificationStatus,
+        supplyModel: product.supplyModel,
+        deliveryContractVersion: product.deliveryContractVersion,
         legalVersion: LEGAL_VERSION,
         legalAcceptanceId: acceptance.id,
         provider
@@ -961,6 +1045,12 @@ export async function registerCommerceRoutes(
         priceGrossGrosz: input.priceGrossGrosz,
         currency: input.currency,
         deliveryType: input.deliveryType,
+        supplyModel: input.supplyModel,
+        taxClassificationStatus: input.taxClassificationStatus,
+        vatRateBps: input.vatRateBps ?? null,
+        taxClassificationRef: input.taxClassificationRef ?? null,
+        taxReviewedAt: input.taxReviewedAt ? new Date(input.taxReviewedAt) : null,
+        deliveryContractVersion: input.deliveryContractVersion ?? null,
         metadata: (input.metadata ?? undefined) as any
       },
       create: {
@@ -972,6 +1062,12 @@ export async function registerCommerceRoutes(
         priceGrossGrosz: input.priceGrossGrosz,
         currency: input.currency,
         deliveryType: input.deliveryType,
+        supplyModel: input.supplyModel,
+        taxClassificationStatus: input.taxClassificationStatus,
+        vatRateBps: input.vatRateBps ?? null,
+        taxClassificationRef: input.taxClassificationRef ?? null,
+        taxReviewedAt: input.taxReviewedAt ? new Date(input.taxReviewedAt) : null,
+        deliveryContractVersion: input.deliveryContractVersion ?? null,
         metadata: (input.metadata ?? undefined) as any
       }
     });
