@@ -183,6 +183,50 @@ type AdminAccountingSummary = {
 };
 
 
+type CommerceProductView = {
+  code: string;
+  name: string;
+  description: string | null;
+  kind: string;
+  priceGrossGrosz: number;
+  currency: string;
+  deliveryType: string;
+};
+
+type CheckoutReadinessView = {
+  ready: boolean;
+  blockedReason: string | null;
+  payment?: {
+    provider?: string | null;
+    stripeMode?: string | null;
+  };
+};
+
+type CommerceOrderStatusView = {
+  id: string;
+  status: string;
+  amountGrossGrosz: number;
+  currency: string;
+  product: {
+    code: string;
+    name: string;
+    deliveryType: string;
+  };
+  payments: Array<{
+    status: string;
+    amountReceivedGrosz: number;
+    refundedGrosz: number;
+    receivedAt: string | null;
+    refundedAt: string | null;
+  }>;
+  entitlements: Array<{
+    id: string;
+    status: string;
+    grantedAt: string;
+  }>;
+};
+
+
 
 const API = process.env.NEXT_PUBLIC_API_BASE_URL ?? 'http://localhost:4000';
 
@@ -253,6 +297,13 @@ export default function Home() {
   const [supportBusy, setSupportBusy] = useState(false);
   const [supportReportId, setSupportReportId] = useState<string | null>(null);
   const [supportError, setSupportError] = useState<string | null>(null);
+  const [commerceProducts, setCommerceProducts] = useState<CommerceProductView[]>([]);
+  const [checkoutReadiness, setCheckoutReadiness] = useState<CheckoutReadinessView | null>(null);
+  const [checkoutImmediateConsent, setCheckoutImmediateConsent] = useState(false);
+  const [checkoutWithdrawalAcknowledged, setCheckoutWithdrawalAcknowledged] = useState(false);
+  const [checkoutBusyCode, setCheckoutBusyCode] = useState<string | null>(null);
+  const [checkoutMessage, setCheckoutMessage] = useState<string | null>(null);
+  const [checkoutOrder, setCheckoutOrder] = useState<CommerceOrderStatusView | null>(null);
 
   const authHeaders = useMemo(
     () => token ? { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' } : undefined,
