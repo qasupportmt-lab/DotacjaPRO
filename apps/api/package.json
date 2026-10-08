@@ -17,7 +17,8 @@
     "zod": "^4.1.11",
     "nodemailer": "^7.0.6",
     "@dotacjapro/rules": "workspace:*",
-    "stripe": "^22.6.0"
+    "stripe": "^22.6.0",
+    "fastify-raw-body": "^5.0.0"
   },
   "devDependencies": {
     "@types/node": "^24.7.0",
