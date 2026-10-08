@@ -1,6 +1,7 @@
 import Fastify, { type FastifyRequest } from 'fastify';
 import crypto from 'node:crypto';
 import cors from '@fastify/cors';
+import fastifyRawBody from 'fastify-raw-body';
 import { z } from 'zod';
 import { prisma } from '@dotacjapro/db';
 import {
@@ -38,6 +39,13 @@ await app.register(cors, {
   methods: ['GET', 'HEAD', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
   allowedHeaders: ['Authorization', 'Content-Type'],
   maxAge: 86400
+});
+
+await app.register(fastifyRawBody, {
+  field: 'rawBody',
+  global: false,
+  encoding: false,
+  runFirst: true
 });
 
 app.addContentTypeParser(
