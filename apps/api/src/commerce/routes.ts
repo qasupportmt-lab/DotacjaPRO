@@ -43,6 +43,16 @@ function stripePaymentLinkModeEnabled() {
   return envBoolean('STRIPE_PAYMENT_LINK_MODE', false);
 }
 
+function stripeClientReferenceId(orderId: string) {
+  return `dp_${orderId}`;
+}
+
+function orderIdFromStripeClientReference(value: string | null | undefined) {
+  if (!value?.startsWith('dp_')) return null;
+  const orderId = value.slice(3);
+  return orderId.length > 0 ? orderId : null;
+}
+
 const productSchema = z.object({
   name: z.string().trim().min(1).max(160),
   description: z.string().trim().max(2000).nullable().optional(),
@@ -283,7 +293,7 @@ async function stripeCreateCheckoutSession(input: {
 }) {
   const body = new URLSearchParams();
   body.set('mode', 'payment');
-  body.set('client_reference_id', input.orderId);
+  body.set('client_reference_id', stripeClientReferenceId(input.orderId));
   body.set('metadata[orderId]', input.orderId);
   body.set('metadata[userId]', input.userId);
   body.set('line_items[0][quantity]', '1');
@@ -1054,7 +1064,7 @@ export async function registerCommerceRoutes(
         stripeMetadata.paymentLinkUrl
       ) {
         const checkoutUrl = new URL(stripeMetadata.paymentLinkUrl);
-        checkoutUrl.searchParams.set('client_reference_id', order.id);
+        checkoutUrl.searchParams.set('client_reference_id', stripeClientReferenceId(order.id));
 
         return reply.code(201).send({
           order,
@@ -1160,10 +1170,11 @@ export async function registerCommerceRoutes(
         ].includes(event.type)
       ) {
         const session = event.data.object as StripeCheckoutSession;
-        const orderId =
+        const orderId = orderIdFromStripeClientReference(
           typeof session.client_reference_id === 'string'
             ? session.client_reference_id
-            : null;
+            : null
+        );
 
         if (!orderId) {
           return {
@@ -1434,7 +1445,7 @@ export async function registerCommerceRoutes(
 
     const session = await stripeGetCheckoutSession(parsed.data.sessionId);
 
-    if (session.client_reference_id !== order.id) {
+    if (orderIdFromStripeClientReference(session.client_reference_id) !== order.id) {
       return reply.code(409).send({ error: 'STRIPE_ORDER_REFERENCE_MISMATCH' });
     }
     if ((session.currency || '').toUpperCase() !== order.currency) {
