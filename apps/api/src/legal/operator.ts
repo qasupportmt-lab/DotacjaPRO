@@ -38,7 +38,7 @@ export function getLegalOperatorState(): LegalOperatorState {
   );
 
   const seller = {
-    brand: process.env.LEGAL_BRAND_NAME ?? 'DoradcaPRO',
+    brand: process.env.LEGAL_BRAND_NAME ?? 'doradcyPRO',
     name: process.env.LEGAL_SELLER_NAME ?? null,
     address: process.env.LEGAL_SELLER_ADDRESS ?? null,
     email: process.env.LEGAL_SELLER_EMAIL ?? process.env.EMAIL_FROM ?? null,
