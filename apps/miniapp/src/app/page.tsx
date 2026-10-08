@@ -299,6 +299,7 @@ export default function Home() {
   const [supportError, setSupportError] = useState<string | null>(null);
   const [commerceProducts, setCommerceProducts] = useState<CommerceProductView[]>([]);
   const [checkoutReadiness, setCheckoutReadiness] = useState<CheckoutReadinessView | null>(null);
+  const [checkoutTermsAccepted, setCheckoutTermsAccepted] = useState(false);
   const [checkoutImmediateConsent, setCheckoutImmediateConsent] = useState(false);
   const [checkoutWithdrawalAcknowledged, setCheckoutWithdrawalAcknowledged] = useState(false);
   const [checkoutBusyCode, setCheckoutBusyCode] = useState<string | null>(null);
@@ -626,9 +627,13 @@ export default function Home() {
       return;
     }
 
-    if (!checkoutImmediateConsent || !checkoutWithdrawalAcknowledged) {
+    if (
+      !checkoutTermsAccepted ||
+      !checkoutImmediateConsent ||
+      !checkoutWithdrawalAcknowledged
+    ) {
       setCheckoutMessage(
-        'Przed płatnością potwierdź natychmiastowe rozpoczęcie dostarczania treści cyfrowej i informację o prawie odstąpienia.'
+        'Przed płatnością zaakceptuj warunki zakupu oraz wymagane potwierdzenia dotyczące treści cyfrowej.'
       );
       return;
     }
