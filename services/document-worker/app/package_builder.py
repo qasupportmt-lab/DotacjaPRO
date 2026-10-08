@@ -8,6 +8,7 @@ from typing import Any
 
 from .storage import get_bytes
 from .legal_pack import LEGAL_VERSION, legal_pack_html, legal_pack_text
+from .ebook_report import build_ebook_report
 
 
 def _safe_name(value: str) -> str:
@@ -196,6 +197,17 @@ pre{white-space:pre-wrap;font-family:Arial,sans-serif}
             "00_WARUNKI_LICENCJA_RODO.txt",
             legal_pack_text().encode("utf-8"),
         )
+        ebook_bytes, ebook_sha256 = build_ebook_report(payload, manifest)
+        archive.writestr(
+            "00_doradcyPRO_RAPORT.pdf",
+            ebook_bytes,
+        )
+        manifest["ebook"] = {
+            "name": "00_doradcyPRO_RAPORT.pdf",
+            "sha256": ebook_sha256,
+            "mimeType": "application/pdf",
+        }
+
         archive.writestr(
             "99_MANIFEST.json",
             json.dumps(
