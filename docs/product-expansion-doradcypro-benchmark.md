@@ -5,7 +5,7 @@ Status: DESIGN / DO NOT IMPLEMENT WITHOUT RELEASE GATE
 
 ## 1. Cel
 
-Rozszerzyć obecną aplikację DoradcaPRO (nazwa robocza do zmiany) z systemu kwalifikacji dotacyjnej o moduł finansowania i usług partnerskich inspirowany zakresem produktowym DoradcyPro, bez kopiowania ich kodu, tekstów, layoutu, danych ani procesów 1:1.
+Rozszerzyć obecną aplikację doradcyPRO (nazwa robocza do zmiany) z systemu kwalifikacji dotacyjnej o moduł finansowania i usług partnerskich inspirowany zakresem produktowym DoradcyPro, bez kopiowania ich kodu, tekstów, layoutu, danych ani procesów 1:1.
 
 Obecny Grant Engine pozostaje niezależny i oparty na oficjalnych źródłach.
 

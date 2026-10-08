@@ -99,7 +99,7 @@ async function createTelegramSupportIssue(
 
 function mainMenu(isAdmin = false) {
   const keyboard = new InlineKeyboard()
-    .webApp('DoradcaPRO — otwórz aplikację', appBaseUrl).row()
+    .webApp('doradcyPRO — otwórz aplikację', appBaseUrl).row()
     .text('Sprawdź dotacje', 'menu:dotacje')
     .text('Moja sprawa', 'menu:sprawa').row()
     .text('Formularze i dokumenty', 'menu:dokumenty').row()
@@ -113,39 +113,39 @@ function mainMenu(isAdmin = false) {
 bot.command('start', async (ctx) => {
   void recordAppActivity('telegram:start');
   await ctx.reply(
-    '<b>DoradcaPRO</b>\n\nWybierz, co chcesz zrobić. DoradcaPRO prowadzi Cię przez finansowanie, sprawę i dokumenty z jednego menu.',
+    '<b>doradcyPRO</b>\n\nWybierz, co chcesz zrobić. doradcyPRO prowadzi Cię przez finansowanie, sprawę i dokumenty z jednego menu.',
     { parse_mode: 'HTML', reply_markup: mainMenu(isAdminTelegram(ctx.from?.id)) }
   );
 });
 
 bot.command('dotacje', async (ctx) => {
   await ctx.reply(
-    '<b>DoradcaPRO — dotacje</b>\n\nSprawdź dostępne finansowanie albo otwórz aplikację, aby przejść pełną ścieżkę.',
+    '<b>doradcyPRO — dotacje</b>\n\nSprawdź dostępne finansowanie albo otwórz aplikację, aby przejść pełną ścieżkę.',
     { parse_mode: 'HTML', reply_markup: new InlineKeyboard().webApp('Sprawdź finansowanie', appBaseUrl).row().text('Wróć do menu', 'menu:home') }
   );
 });
 
 bot.callbackQuery('menu:home', async (ctx) => {
   await ctx.answerCallbackQuery();
-  await ctx.editMessageText('<b>DoradcaPRO</b>\n\nWybierz, co chcesz zrobić.', { parse_mode: 'HTML', reply_markup: mainMenu(isAdminTelegram(ctx.from?.id)) });
+  await ctx.editMessageText('<b>doradcyPRO</b>\n\nWybierz, co chcesz zrobić.', { parse_mode: 'HTML', reply_markup: mainMenu(isAdminTelegram(ctx.from?.id)) });
 });
 
 bot.callbackQuery('menu:dotacje', async (ctx) => {
   void recordAppActivity('telegram:menu:dotacje');
   await ctx.answerCallbackQuery();
-  await ctx.editMessageText('<b>Sprawdź dotacje</b>\n\nDoradcaPRO dopasuje dostępne finansowanie do Twojej sytuacji i regionu.', { parse_mode: 'HTML', reply_markup: new InlineKeyboard().webApp('Uruchom DoradcęPRO', appBaseUrl).row().text('Wróć', 'menu:home') });
+  await ctx.editMessageText('<b>Sprawdź dotacje</b>\n\ndoradcyPRO dopasuje dostępne finansowanie do Twojej sytuacji i regionu.', { parse_mode: 'HTML', reply_markup: new InlineKeyboard().webApp('Uruchom doradcyPRO', appBaseUrl).row().text('Wróć', 'menu:home') });
 });
 
 bot.callbackQuery('menu:sprawa', async (ctx) => {
   void recordAppActivity('telegram:menu:sprawa');
   await ctx.answerCallbackQuery();
-  await ctx.editMessageText('<b>Moja sprawa</b>\n\nOtwórz konto DoradcaPRO, aby zobaczyć swoją sprawę i jej aktualny etap.', { parse_mode: 'HTML', reply_markup: new InlineKeyboard().webApp('Otwórz moją sprawę', appBaseUrl).row().text('Wróć', 'menu:home') });
+  await ctx.editMessageText('<b>Moja sprawa</b>\n\nOtwórz konto doradcyPRO, aby zobaczyć swoją sprawę i jej aktualny etap.', { parse_mode: 'HTML', reply_markup: new InlineKeyboard().webApp('Otwórz moją sprawę', appBaseUrl).row().text('Wróć', 'menu:home') });
 });
 
 bot.callbackQuery('menu:dokumenty', async (ctx) => {
   void recordAppActivity('telegram:menu:dokumenty');
   await ctx.answerCallbackQuery();
-  await ctx.editMessageText('<b>Formularze i dokumenty</b>\n\nDokumenty i formularze są dostępne na Twoim koncie DoradcaPRO.', { parse_mode: 'HTML', reply_markup: new InlineKeyboard().webApp('Otwórz dokumenty', appBaseUrl).row().text('Wróć', 'menu:home') });
+  await ctx.editMessageText('<b>Formularze i dokumenty</b>\n\nDokumenty i formularze są dostępne na Twoim koncie doradcyPRO.', { parse_mode: 'HTML', reply_markup: new InlineKeyboard().webApp('Otwórz dokumenty', appBaseUrl).row().text('Wróć', 'menu:home') });
 });
 
 bot.callbackQuery('menu:pakiety', async (ctx) => {
@@ -157,7 +157,7 @@ bot.callbackQuery('menu:pakiety', async (ctx) => {
 bot.callbackQuery('menu:pomoc', async (ctx) => {
   void recordAppActivity('telegram:menu:pomoc');
   await ctx.answerCallbackQuery();
-  await ctx.editMessageText('<b>Pomoc DoradcaPRO</b>\n\nWybierz funkcję z menu lub otwórz aplikację. Polecenie /help pokazuje także dostępne komendy.', { parse_mode: 'HTML', reply_markup: new InlineKeyboard().webApp('Otwórz DoradcęPRO', appBaseUrl).row().text('Wróć', 'menu:home') });
+  await ctx.editMessageText('<b>Pomoc doradcyPRO</b>\n\nWybierz funkcję z menu lub otwórz aplikację. Polecenie /help pokazuje także dostępne komendy.', { parse_mode: 'HTML', reply_markup: new InlineKeyboard().webApp('Otwórz doradcyPRO', appBaseUrl).row().text('Wróć', 'menu:home') });
 });
 
 bot.callbackQuery('menu:dostepy', async (ctx) => {
@@ -166,7 +166,7 @@ bot.callbackQuery('menu:dostepy', async (ctx) => {
 
   void recordAppActivity('owner:access-audit');
   await ctx.editMessageText(
-    '<b>DoradcaPRO — dostępy użytkowników</b>\n\nOtwórz prywatny audyt dostępów. Panel pokaże pseudonimowy identyfikator użytkownika, aktywne pakiety, liczbę dokumentów i gotowych paczek.',
+    '<b>doradcyPRO — dostępy użytkowników</b>\n\nOtwórz prywatny audyt dostępów. Panel pokaże pseudonimowy identyfikator użytkownika, aktywne pakiety, liczbę dokumentów i gotowych paczek.',
     {
       parse_mode: 'HTML',
       reply_markup: new InlineKeyboard()
@@ -179,12 +179,12 @@ bot.callbackQuery('menu:dostepy', async (ctx) => {
 
 bot.command('dostepy', async (ctx) => {
   if (!isAdminTelegram(ctx.from?.id)) {
-    return ctx.reply('Ta funkcja jest dostępna tylko dla administratora DoradcaPRO.');
+    return ctx.reply('Ta funkcja jest dostępna tylko dla administratora doradcyPRO.');
   }
 
   void recordAppActivity('owner:access-audit');
   await ctx.reply(
-    '<b>DoradcaPRO — dostępy użytkowników</b>\n\nPanel nie wymaga hasła, gdy otwierasz go z Telegrama jako właściciel.',
+    '<b>doradcyPRO — dostępy użytkowników</b>\n\nPanel nie wymaga hasła, gdy otwierasz go z Telegrama jako właściciel.',
     {
       parse_mode: 'HTML',
       reply_markup: new InlineKeyboard().webApp(
@@ -198,7 +198,7 @@ bot.command('dostepy', async (ctx) => {
 bot.callbackQuery('menu:admin', async (ctx) => {
   await ctx.answerCallbackQuery();
   if (!isAdminTelegram(ctx.from?.id)) return;
-  await ctx.editMessageText('<b>DoradcaPRO — panel właściciela</b>\n\nDostępne polecenia: /supervisor, /dostepy, /status, /ksiegowa.', { parse_mode: 'HTML', reply_markup: new InlineKeyboard().webApp('Audyt dostępów', appBaseUrl + '?admin=access').row().text('Wróć', 'menu:home') });
+  await ctx.editMessageText('<b>doradcyPRO — panel właściciela</b>\n\nDostępne polecenia: /supervisor, /dostepy, /status, /ksiegowa.', { parse_mode: 'HTML', reply_markup: new InlineKeyboard().webApp('Audyt dostępów', appBaseUrl + '?admin=access').row().text('Wróć', 'menu:home') });
 });
 
 bot.command('whoami', async (ctx) => {
@@ -207,7 +207,7 @@ bot.command('whoami', async (ctx) => {
       'Twój identyfikator Telegram:',
       `<code>${ctx.from?.id ?? 'brak'}</code>`,
       '',
-      'Administrator DotacjaPRO może dodać ten numer do ADMIN_TELEGRAM_USER_IDS.'
+      'Administrator doradcyPRO może dodać ten numer do ADMIN_TELEGRAM_USER_IDS.'
     ].join('\n'),
     { parse_mode: 'HTML' }
   );
@@ -235,7 +235,7 @@ bot.command('ksiegowa', async (ctx) => {
     );
 
     if (response.status === 403) {
-      return ctx.reply('Ta funkcja jest dostępna tylko dla administratora DotacjaPRO.');
+      return ctx.reply('Ta funkcja jest dostępna tylko dla administratora doradcyPRO.');
     }
     if (!response.ok) {
       throw new Error('Accounting summary HTTP ' + response.status);
@@ -271,7 +271,7 @@ bot.command('ksiegowa', async (ctx) => {
 
     await ctx.reply(
       [
-        '<b>DotacjaPRO — Księgowa</b>',
+        '<b>doradcyPRO — Księgowa</b>',
         `Q${q.quarter} ${q.year}: ${q.dueRevenuePln} zł / ${q.limitPln ?? '—'} zł`,
         limitLine,
         '',
@@ -291,7 +291,7 @@ bot.command('ksiegowa', async (ctx) => {
 });
 
 bot.command('supervisor', async (ctx) => {
-  if (!isAdminTelegram(ctx.from?.id)) return ctx.reply('Ta funkcja jest dostępna tylko dla administratora DotacjaPRO.');
+  if (!isAdminTelegram(ctx.from?.id)) return ctx.reply('Ta funkcja jest dostępna tylko dla administratora doradcyPRO.');
   if (!workerSecret) return ctx.reply('Supervisor nie jest skonfigurowany.');
   try {
     const response = await fetch(apiBaseUrl.replace(/\/$/, '') + '/v1/internal/supervisor/summary', {
@@ -303,7 +303,7 @@ bot.command('supervisor', async (ctx) => {
     const top = data.commerce.ranking?.[0];
     const alerts = data.alerts?.length ? data.alerts.map((x: string) => '• ' + x).join('\n') : 'Brak aktywnych alertów.';
     await ctx.reply([
-      '<b>DotacjaPRO — SUPERVISOR</b>',
+      '<b>doradcyPRO — SUPERVISOR</b>',
       '',
       '<b>Użytkownicy</b>',
       `Łącznie: ${data.users.total} | nowe 24h: ${data.users.new24h}`,
@@ -321,7 +321,7 @@ bot.command('supervisor', async (ctx) => {
       `Gotowe paczki: ${data.access?.completedPackagesTotal ?? 0}`,
       '',
       '<b>Operacje</b>',
-      `Aktywność DoradcaPRO/Telegram 24h: ${data.operations.auditEvents24h ?? 0}`,
+      `Aktywność doradcyPRO/Telegram 24h: ${data.operations.auditEvents24h ?? 0}`,
       `Oczekujące powiadomienia: ${data.operations.pendingNotifications}`,
       `Błędy powiadomień: ${data.operations.failedNotifications}`,
       `Błędy dokumentów/paczek 7d: ${data.operations.renderFailures7d}/${data.operations.packageFailures7d}`,
@@ -336,14 +336,14 @@ bot.command('supervisor', async (ctx) => {
 });
 
 bot.command('status', async (ctx) => {
-  if (!isAdminTelegram(ctx.from?.id)) return ctx.reply('Ta funkcja jest dostępna tylko dla administratora DotacjaPRO.');
+  if (!isAdminTelegram(ctx.from?.id)) return ctx.reply('Ta funkcja jest dostępna tylko dla administratora doradcyPRO.');
   try {
     const [api, webhook] = await Promise.all([
       fetch(apiBaseUrl.replace(/\/$/, '') + '/ready', { signal: AbortSignal.timeout(10_000) }),
       bot.api.getWebhookInfo()
     ]);
     await ctx.reply([
-      '<b>DotacjaPRO — STATUS</b>',
+      '<b>doradcyPRO — STATUS</b>',
       `Bot: OK`,
       `API: ${api.ok ? 'OK' : 'BŁĄD ' + api.status}`,
       `Webhook: ${webhook.url ? 'OK' : 'BRAK'}`,
@@ -438,10 +438,10 @@ bot.on('message:text', async (ctx) => {
 });
 
 bot.command('help', async (ctx) => {
-  const keyboard = new InlineKeyboard().webApp('Otwórz DotacjaPRO', appBaseUrl);
+  const keyboard = new InlineKeyboard().webApp('Otwórz doradcyPRO', appBaseUrl);
   await ctx.reply(
     [
-      '<b>DotacjaPRO</b>',
+      '<b>doradcyPRO</b>',
       '/start — otwórz aplikację',
       '/dotacje — sprawdź dostępne finansowanie',
       '/whoami — pokaż Twój Telegram ID',
@@ -503,7 +503,7 @@ async function deliverPendingNotifications(limit = 100) {
 
   for (const item of data.notifications) {
     try {
-      const keyboard = new InlineKeyboard().webApp('Otwórz DotacjaPRO', appBaseUrl);
+      const keyboard = new InlineKeyboard().webApp('Otwórz doradcyPRO', appBaseUrl);
       await bot.api.sendMessage(
         Number(item.telegramUserId),
         '<b>' + escapeHtml(item.title) + '</b>\n\n' + escapeHtml(item.body),

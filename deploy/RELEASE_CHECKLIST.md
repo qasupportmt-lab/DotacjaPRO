@@ -1,4 +1,4 @@
-# DotacjaPRO — production release gate
+# doradcyPRO — production release gate
 
 A production release is allowed only when all items below are satisfied.
 

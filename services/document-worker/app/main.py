@@ -464,7 +464,7 @@ async def lifespan(_: FastAPI):
 
 
 app = FastAPI(
-    title="DotacjaPRO Document Worker",
+    title="doradcyPRO Document Worker",
     lifespan=lifespan,
 )
 

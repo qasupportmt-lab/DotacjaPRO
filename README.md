@@ -1,4 +1,4 @@
-# DotacjaPRO
+# doradcyPRO
 
 Cyfrowy system doradczy dla osób zakładających działalność gospodarczą w Polsce, ze szczególnym naciskiem na osoby bezrobotne ubiegające się o dofinansowanie z PUP oraz środki UE/LGD/PFRON/BGK.
 

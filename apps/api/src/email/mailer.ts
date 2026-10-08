@@ -10,7 +10,7 @@ function brevoSender() {
 
   return {
     email,
-    name: process.env.BREVO_FROM_NAME?.trim() || 'DotacjaPRO'
+    name: process.env.BREVO_FROM_NAME?.trim() || 'doradcyPRO'
   };
 }
 
@@ -124,9 +124,9 @@ export function emailProviderConfigured() {
 }
 
 export async function sendEmailVerificationCode(email: string, code: string) {
-  const subject = 'DotacjaPRO — kod weryfikacyjny';
-  const text = `Twój kod weryfikacyjny DotacjaPRO: ${code}\n\nKod jest ważny przez 10 minut.`;
-  const html = `<p>Twój kod weryfikacyjny DotacjaPRO:</p><p style="font-size:24px;font-weight:700;letter-spacing:4px">${code}</p><p>Kod jest ważny przez 10 minut.</p>`;
+  const subject = 'doradcyPRO — kod weryfikacyjny';
+  const text = `Twój kod weryfikacyjny doradcyPRO: ${code}\n\nKod jest ważny przez 10 minut.`;
+  const html = `<p>Twój kod weryfikacyjny doradcyPRO:</p><p style="font-size:24px;font-weight:700;letter-spacing:4px">${code}</p><p>Kod jest ważny przez 10 minut.</p>`;
 
   if (await sendViaBrevo({ to: email, subject, text, html })) {
     return;
@@ -150,6 +150,80 @@ export async function sendEmailVerificationCode(email: string, code: string) {
   await smtp.transport.sendMail({
     from: smtp.from,
     to: email,
+    subject,
+    text,
+    html
+  });
+}
+
+
+function escapeHtml(value: string) {
+  return value
+    .replaceAll('&', '&amp;')
+    .replaceAll('<', '&lt;')
+    .replaceAll('>', '&gt;')
+    .replaceAll('"', '&quot;')
+    .replaceAll("'", '&#39;');
+}
+
+export async function sendProductAccessEmail(input: {
+  email: string;
+  productName: string;
+  accessKey: string;
+  entitlementId: string;
+  appUrl: string;
+}) {
+  const safeProduct = escapeHtml(input.productName);
+  const safeKey = escapeHtml(input.accessKey);
+  const safeUrl = escapeHtml(input.appUrl);
+  const subject = `doradcyPRO — dostęp do: ${input.productName}`;
+  const text = [
+    `Zakupiony produkt: ${input.productName}`,
+    '',
+    `Twój jednorazowy klucz aktywacyjny: ${input.accessKey}`,
+    '',
+    'Zaloguj się na swoje konto doradcyPRO i użyj klucza do aktywacji dostępu.',
+    `Aplikacja: ${input.appUrl}`,
+    '',
+    'Klucz jest przypisany do Twojego konta i zakupionego produktu. Nie udostępniaj go innym osobom.'
+  ].join('\n');
+  const html = [
+    `<h2>doradcyPRO — dostęp do produktu</h2>`,
+    `<p>Zakupiony produkt: <strong>${safeProduct}</strong></p>`,
+    '<p>Twój jednorazowy klucz aktywacyjny:</p>',
+    `<p style="font-size:22px;font-weight:700;letter-spacing:1px"><code>${safeKey}</code></p>`,
+    '<p>Zaloguj się na swoje konto doradcyPRO i użyj klucza do aktywacji dostępu.</p>',
+    `<p><a href="${safeUrl}">Otwórz doradcyPRO</a></p>`,
+    '<p>Klucz jest przypisany do Twojego konta i zakupionego produktu. Nie udostępniaj go innym osobom.</p>'
+  ].join('');
+
+  if (await sendViaBrevo({
+    to: input.email,
+    subject,
+    text,
+    html
+  })) {
+    return;
+  }
+
+  if (await sendViaResend({
+    to: input.email,
+    subject,
+    text,
+    html,
+    idempotencyKey: `product-access/${input.entitlementId}`
+  })) {
+    return;
+  }
+
+  const smtp = smtpConfig();
+  if (!smtp) {
+    throw new Error('EMAIL_PROVIDER_NOT_CONFIGURED');
+  }
+
+  await smtp.transport.sendMail({
+    from: smtp.from,
+    to: input.email,
     subject,
     text,
     html

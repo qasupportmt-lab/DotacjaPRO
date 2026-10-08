@@ -1,15 +1,57 @@
-import crypto from 'node:crypto';
+import { createHash } from 'node:crypto';
 import type { FastifyInstance, FastifyRequest } from 'fastify';
 import { z } from 'zod';
 import { prisma } from '@dotacjapro/db';
 import { LEGAL_VERSION } from '../legal/policy.js';
 import { envBoolean, getLegalOperatorState } from '../legal/operator.js';
+import { generateAccessKey, hashAccessKey } from './access-keys.js';
+import { sendProductAccessEmail } from '../email/mailer.js';
+import { readStripeProductMetadata, verifyStripeSignature } from './stripe-webhook.js';
 
 type CommerceRouteDeps = {
   requireWorkerSecret: (request: FastifyRequest) => void;
   requireUserId: (request: FastifyRequest) => Promise<string>;
   requireAdminUserId: (request: FastifyRequest) => Promise<string>;
 };
+
+type FastifyRequestWithRawBody = FastifyRequest & {
+  rawBody?: Buffer;
+};
+
+type StripeWebhookEnvelope = {
+  id: string;
+  type: string;
+  created: number;
+  livemode: boolean;
+  data: {
+    object: Record<string, unknown>;
+  };
+};
+
+function stripeWebhookSecret() {
+  const value = process.env.STRIPE_WEBHOOK_SECRET?.trim();
+  if (!value) {
+    throw Object.assign(
+      new Error('STRIPE_WEBHOOK_SECRET_NOT_CONFIGURED'),
+      { statusCode: 503 }
+    );
+  }
+  return value;
+}
+
+function stripePaymentLinkModeEnabled() {
+  return envBoolean('STRIPE_PAYMENT_LINK_MODE', false);
+}
+
+function stripeClientReferenceId(orderId: string) {
+  return `dp_${orderId}`;
+}
+
+function orderIdFromStripeClientReference(value: string | null | undefined) {
+  if (!value?.startsWith('dp_')) return null;
+  const orderId = value.slice(3);
+  return orderId.length > 0 ? orderId : null;
+}
 
 const productSchema = z.object({
   name: z.string().trim().min(1).max(160),
@@ -19,6 +61,23 @@ const productSchema = z.object({
   priceGrossGrosz: z.number().int().min(0).max(2_000_000_000).nullable(),
   currency: z.literal('PLN').default('PLN'),
   deliveryType: z.enum(['DIGITAL', 'SERVICE', 'HYBRID']).default('DIGITAL'),
+  supplyModel: z.enum([
+    'UNCLASSIFIED',
+    'PUBLICATION_ONLY',
+    'PUBLICATION_WITH_INTEGRAL_DIGITAL_COMPONENT',
+    'DIGITAL_SERVICE',
+    'HYBRID'
+  ]).default('UNCLASSIFIED'),
+  taxClassificationStatus: z.enum([
+    'PENDING',
+    'CONFIRMED',
+    'WIS_CONFIRMED',
+    'REJECTED'
+  ]).default('PENDING'),
+  vatRateBps: z.number().int().min(0).max(2300).nullable().optional(),
+  taxClassificationRef: z.string().trim().max(500).nullable().optional(),
+  taxReviewedAt: z.string().datetime().nullable().optional(),
+  deliveryContractVersion: z.string().trim().max(120).nullable().optional(),
   metadata: z.record(z.string(), z.unknown()).optional()
 }).superRefine((value, ctx) => {
   if (value.active && value.priceGrossGrosz === null) {
@@ -28,11 +87,57 @@ const productSchema = z.object({
       message: 'An active paid product must have a configured price'
     });
   }
+
+  if (
+    value.active &&
+    !['CONFIRMED', 'WIS_CONFIRMED'].includes(value.taxClassificationStatus)
+  ) {
+    ctx.addIssue({
+      code: 'custom',
+      path: ['taxClassificationStatus'],
+      message: 'Active product requires confirmed tax classification'
+    });
+  }
+
+  if (value.active && value.vatRateBps == null) {
+    ctx.addIssue({
+      code: 'custom',
+      path: ['vatRateBps'],
+      message: 'Active product requires VAT rate snapshot'
+    });
+  }
+
+  if (value.active && value.supplyModel === 'UNCLASSIFIED') {
+    ctx.addIssue({
+      code: 'custom',
+      path: ['supplyModel'],
+      message: 'Active product requires supply model classification'
+    });
+  }
+
+  if (value.active && !value.deliveryContractVersion) {
+    ctx.addIssue({
+      code: 'custom',
+      path: ['deliveryContractVersion'],
+      message: 'Active product requires delivery contract version'
+    });
+  }
 });
 
 const orderSchema = z.object({
   productCode: z.string().trim().min(1).max(80),
   legalAcceptanceId: z.string().trim().min(1).max(200)
+});
+
+const accessKeyIssueSchema = z.object({
+  entitlementId: z.string().trim().min(1).max(240),
+  expiresInHours: z.number().int().min(1).max(24 * 90).default(24 * 30),
+  purpose: z.string().trim().min(1).max(80).default('PRODUCT_ACCESS'),
+  rotate: z.boolean().default(false)
+});
+
+const accessKeyRedeemSchema = z.object({
+  accessKey: z.string().trim().regex(/^ak1_[A-Za-z0-9_-]{40,60}$/)
 });
 
 const paymentRecordSchema = z.object({
@@ -69,10 +174,35 @@ const paymentRecordSchema = z.object({
 function paymentProviderState() {
   const provider = process.env.PAYMENT_PROVIDER?.trim().toUpperCase() || null;
   const enabled = envBoolean('PAYMENT_PROVIDER_ENABLED', false);
+  const dynamicCheckoutReady = Boolean(
+    process.env.STRIPE_SECRET_KEY?.trim() &&
+    (
+      process.env.CHECKOUT_RETURN_BASE_URL?.trim() ||
+      process.env.APP_BASE_URL?.trim()
+    )
+  );
+  const paymentLinkReady = Boolean(
+    stripePaymentLinkModeEnabled() &&
+    process.env.STRIPE_WEBHOOK_SECRET?.trim()
+  );
+  const stripeConfigured =
+    provider === 'STRIPE'
+      ? dynamicCheckoutReady || paymentLinkReady
+      : true;
 
   return {
     provider,
-    configured: Boolean(provider && enabled)
+    enabled,
+    configured: Boolean(provider && enabled && stripeConfigured),
+    adapterReady: Boolean(provider && enabled && stripeConfigured),
+    stripeMode:
+      provider === 'STRIPE'
+        ? dynamicCheckoutReady
+          ? 'CHECKOUT_SESSIONS'
+          : paymentLinkReady
+            ? 'PAYMENT_LINKS'
+            : 'NOT_READY'
+        : null
   };
 }
 
@@ -93,6 +223,16 @@ function checkoutReadiness() {
   };
 }
 
+function calculateTaxFromGross(amountGrossGrosz: number, vatRateBps: number) {
+  const amountNetGrosz = Math.round(
+    amountGrossGrosz * 10_000 / (10_000 + vatRateBps)
+  );
+  return {
+    amountNetGrosz,
+    amountVatGrosz: amountGrossGrosz - amountNetGrosz
+  };
+}
+
 function checkoutAcceptanceValid(metadata: unknown) {
   if (!metadata || typeof metadata !== 'object' || Array.isArray(metadata)) {
     return false;
@@ -106,6 +246,268 @@ function checkoutAcceptanceValid(metadata: unknown) {
     value.digitalImmediateConsent === true &&
     value.withdrawalAcknowledged === true
   );
+}
+
+
+type StripeCheckoutSession = {
+  id: string;
+  url?: string | null;
+  payment_status?: string | null;
+  amount_total?: number | null;
+  currency?: string | null;
+  client_reference_id?: string | null;
+  metadata?: Record<string, string>;
+  livemode?: boolean;
+  payment_intent?: string | { id?: string } | null;
+  payment_link?: string | { id?: string } | null;
+};
+
+function stripeSecret() {
+  const value = process.env.STRIPE_SECRET_KEY?.trim();
+  if (!value) {
+    throw Object.assign(new Error('STRIPE_SECRET_KEY_NOT_CONFIGURED'), {
+      statusCode: 409
+    });
+  }
+  return value;
+}
+
+function checkoutReturnBaseUrl() {
+  const value =
+    process.env.CHECKOUT_RETURN_BASE_URL?.trim() ||
+    process.env.APP_BASE_URL?.trim();
+  if (!value) {
+    throw Object.assign(new Error('CHECKOUT_RETURN_BASE_URL_NOT_CONFIGURED'), {
+      statusCode: 409
+    });
+  }
+  return value.replace(/\/$/, '');
+}
+
+async function stripeCreateCheckoutSession(input: {
+  orderId: string;
+  userId: string;
+  productName: string;
+  amountGrossGrosz: number;
+  currency: string;
+}) {
+  const body = new URLSearchParams();
+  body.set('mode', 'payment');
+  body.set('client_reference_id', stripeClientReferenceId(input.orderId));
+  body.set('metadata[orderId]', input.orderId);
+  body.set('metadata[userId]', input.userId);
+  body.set('line_items[0][quantity]', '1');
+  body.set('line_items[0][price_data][currency]', input.currency.toLowerCase());
+  body.set('line_items[0][price_data][unit_amount]', String(input.amountGrossGrosz));
+  body.set('line_items[0][price_data][product_data][name]', input.productName);
+  body.set('automatic_payment_methods[enabled]', 'true');
+  body.set('locale', 'pl');
+
+  const base = checkoutReturnBaseUrl();
+  body.set(
+    'success_url',
+    `${base}/?checkout=success&order_id=${encodeURIComponent(input.orderId)}&session_id={CHECKOUT_SESSION_ID}`
+  );
+  body.set(
+    'cancel_url',
+    `${base}/?checkout=cancel&order_id=${encodeURIComponent(input.orderId)}`
+  );
+
+  const response = await fetch('https://api.stripe.com/v1/checkout/sessions', {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${stripeSecret()}`,
+      'Content-Type': 'application/x-www-form-urlencoded'
+    },
+    body
+  });
+
+  const payload = await response.json() as StripeCheckoutSession & {
+    error?: { message?: string; type?: string };
+  };
+
+  if (!response.ok || !payload.id || !payload.url) {
+    throw Object.assign(
+      new Error(payload.error?.message || 'STRIPE_CHECKOUT_CREATE_FAILED'),
+      { statusCode: 502 }
+    );
+  }
+
+  return payload;
+}
+
+async function stripeGetCheckoutSession(sessionId: string) {
+  const response = await fetch(
+    `https://api.stripe.com/v1/checkout/sessions/${encodeURIComponent(sessionId)}`,
+    {
+      headers: {
+        Authorization: `Bearer ${stripeSecret()}`
+      }
+    }
+  );
+
+  const payload = await response.json() as StripeCheckoutSession & {
+    error?: { message?: string; type?: string };
+  };
+
+  if (!response.ok || !payload.id) {
+    throw Object.assign(
+      new Error(payload.error?.message || 'STRIPE_SESSION_LOOKUP_FAILED'),
+      { statusCode: 502 }
+    );
+  }
+
+  return payload;
+}
+
+async function deliverPaidDigitalAccess(
+  app: FastifyInstance,
+  orderId: string
+) {
+  const entitlement = await prisma.entitlement.findFirst({
+    where: {
+      orderId,
+      status: 'ACTIVE'
+    },
+    include: {
+      user: {
+        select: {
+          email: true,
+          emailVerifiedAt: true
+        }
+      },
+      product: {
+        select: {
+          code: true,
+          name: true,
+          deliveryType: true
+        }
+      },
+      redemptionTokens: {
+        where: {
+          status: { in: ['ISSUED', 'REDEEMED'] }
+        },
+        orderBy: { issuedAt: 'desc' },
+        take: 1
+      }
+    }
+  });
+
+  if (!entitlement) {
+    throw new Error('PAID_ENTITLEMENT_NOT_FOUND');
+  }
+
+  if (!['DIGITAL', 'HYBRID'].includes(entitlement.product.deliveryType)) {
+    return { delivered: false, reason: 'NON_DIGITAL_PRODUCT' };
+  }
+
+  if (!entitlement.user.email || !entitlement.user.emailVerifiedAt) {
+    throw new Error('VERIFIED_EMAIL_REQUIRED_FOR_DIGITAL_DELIVERY');
+  }
+
+  const existingToken = entitlement.redemptionTokens[0] ?? null;
+  if (existingToken) {
+    const delivered = await prisma.auditEvent.findFirst({
+      where: {
+        userId: entitlement.userId,
+        action: 'PRODUCT_ACCESS_KEY_DELIVERED',
+        entity: 'AccessRedemptionToken',
+        entityId: existingToken.id
+      },
+      select: { id: true }
+    });
+
+    if (delivered || existingToken.status === 'REDEEMED') {
+      return {
+        delivered: true,
+        idempotent: true,
+        entitlementId: entitlement.id
+      };
+    }
+
+    await prisma.accessRedemptionToken.updateMany({
+      where: {
+        id: existingToken.id,
+        status: 'ISSUED'
+      },
+      data: {
+        status: 'REVOKED',
+        revokedAt: new Date()
+      }
+    });
+  }
+
+  const workerSecret = process.env.INTERNAL_WORKER_SECRET;
+  if (!workerSecret) {
+    throw new Error('INTERNAL_WORKER_SECRET_NOT_CONFIGURED');
+  }
+
+  const issuedResponse = await app.inject({
+    method: 'POST',
+    url: '/v1/internal/access-keys/issue',
+    headers: {
+      'content-type': 'application/json',
+      'x-worker-secret': workerSecret
+    },
+    payload: {
+      entitlementId: entitlement.id,
+      purpose: 'PRODUCT_ACCESS'
+    }
+  });
+
+  if (issuedResponse.statusCode >= 400) {
+    throw new Error(
+      `ACCESS_KEY_ISSUE_FAILED_${issuedResponse.statusCode}`
+    );
+  }
+
+  const issued = issuedResponse.json() as {
+    token: { id: string };
+    accessKey: string;
+  };
+
+  try {
+    await sendProductAccessEmail({
+      email: entitlement.user.email,
+      productName: entitlement.product.name,
+      accessKey: issued.accessKey,
+      entitlementId: entitlement.id,
+      appUrl: checkoutReturnBaseUrl()
+    });
+
+    await prisma.auditEvent.create({
+      data: {
+        userId: entitlement.userId,
+        actorType: 'SYSTEM',
+        action: 'PRODUCT_ACCESS_KEY_DELIVERED',
+        entity: 'AccessRedemptionToken',
+        entityId: issued.token.id,
+        metadata: {
+          entitlementId: entitlement.id,
+          productCode: entitlement.product.code,
+          deliveryChannel: 'EMAIL'
+        }
+      }
+    });
+  } catch (error) {
+    await prisma.accessRedemptionToken.updateMany({
+      where: {
+        id: issued.token.id,
+        status: 'ISSUED'
+      },
+      data: {
+        status: 'REVOKED',
+        revokedAt: new Date()
+      }
+    });
+    throw error;
+  }
+
+  return {
+    delivered: true,
+    idempotent: false,
+    entitlementId: entitlement.id
+  };
 }
 
 async function sendSaleToAccounting(
@@ -254,6 +656,52 @@ export async function registerCommerceRoutes(
     return { orders };
   });
 
+  app.get('/v1/me/orders/:id', async (request, reply) => {
+    const userId = await deps.requireUserId(request);
+    const id = String((request.params as { id?: string }).id ?? '').trim();
+    if (!id) {
+      return reply.code(400).send({ error: 'ORDER_ID_REQUIRED' });
+    }
+
+    const order = await prisma.commerceOrder.findFirst({
+      where: { id, userId },
+      include: {
+        product: {
+          select: {
+            code: true,
+            name: true,
+            deliveryType: true
+          }
+        },
+        payments: {
+          orderBy: { createdAt: 'desc' },
+          take: 5,
+          select: {
+            status: true,
+            amountReceivedGrosz: true,
+            refundedGrosz: true,
+            receivedAt: true,
+            refundedAt: true
+          }
+        },
+        entitlements: {
+          where: { status: 'ACTIVE' },
+          select: {
+            id: true,
+            status: true,
+            grantedAt: true
+          }
+        }
+      }
+    });
+
+    if (!order) {
+      return reply.code(404).send({ error: 'ORDER_NOT_FOUND' });
+    }
+
+    return { order };
+  });
+
   app.get('/v1/me/entitlements', async (request) => {
     const userId = await deps.requireUserId(request);
     const entitlements = await prisma.entitlement.findMany({
@@ -274,6 +722,222 @@ export async function registerCommerceRoutes(
     return { entitlements };
   });
 
+
+  app.post('/v1/internal/access-keys/issue', async (request, reply) => {
+    deps.requireWorkerSecret(request);
+    const parsed = accessKeyIssueSchema.safeParse(request.body);
+    if (!parsed.success) {
+      return reply.code(400).send({
+        error: 'INVALID_ACCESS_KEY_ISSUE_REQUEST',
+        details: parsed.error.flatten()
+      });
+    }
+
+    const entitlement = await prisma.entitlement.findUnique({
+      where: { id: parsed.data.entitlementId },
+      include: {
+        order: { select: { id: true, status: true } },
+        product: { select: { id: true, code: true, name: true } }
+      }
+    });
+
+    if (!entitlement || entitlement.status !== 'ACTIVE') {
+      return reply.code(409).send({ error: 'ACTIVE_ENTITLEMENT_REQUIRED' });
+    }
+    if (!entitlement.order || entitlement.order.status !== 'PAID') {
+      return reply.code(409).send({ error: 'PAID_ORDER_REQUIRED' });
+    }
+
+    const now = new Date();
+    const expiresAt = new Date(
+      now.getTime() + parsed.data.expiresInHours * 60 * 60 * 1000
+    );
+    const accessKey = generateAccessKey();
+    const tokenHash = hashAccessKey(accessKey);
+
+    const issued = await prisma.$transaction(async (tx) => {
+      await tx.$queryRaw<Array<{ id: string }>>`
+        SELECT "id"
+        FROM "Entitlement"
+        WHERE "id" = ${entitlement.id}
+        FOR UPDATE
+      `;
+
+      const existing = await tx.accessRedemptionToken.findFirst({
+        where: {
+          entitlementId: entitlement.id,
+          status: 'ISSUED',
+          expiresAt: { gt: now }
+        },
+        select: { id: true }
+      });
+
+      if (existing && !parsed.data.rotate) {
+        return { conflict: true as const, token: null };
+      }
+
+      if (existing && parsed.data.rotate) {
+        await tx.accessRedemptionToken.updateMany({
+          where: {
+            entitlementId: entitlement.id,
+            status: 'ISSUED'
+          },
+          data: {
+            status: 'REVOKED',
+            revokedAt: now
+          }
+        });
+      }
+
+      const token = await tx.accessRedemptionToken.create({
+        data: {
+          entitlementId: entitlement.id,
+          tokenHash,
+          purpose: parsed.data.purpose,
+          expiresAt,
+          metadata: {
+            orderId: entitlement.order?.id,
+            productCode: entitlement.product.code
+          }
+        },
+        select: {
+          id: true,
+          entitlementId: true,
+          purpose: true,
+          expiresAt: true,
+          issuedAt: true
+        }
+      });
+
+      await tx.auditEvent.create({
+        data: {
+          userId: entitlement.userId,
+          actorType: 'SYSTEM',
+          action: 'ACCESS_KEY_ISSUED',
+          entity: 'AccessRedemptionToken',
+          entityId: token.id,
+          metadata: {
+            entitlementId: entitlement.id,
+            orderId: entitlement.order?.id,
+            productCode: entitlement.product.code,
+            expiresAt: expiresAt.toISOString(),
+            purpose: parsed.data.purpose
+          }
+        }
+      });
+
+      return { conflict: false as const, token };
+    });
+
+    if (issued.conflict) {
+      return reply.code(409).send({
+        error: 'ACCESS_KEY_ALREADY_ISSUED',
+        hint: 'Set rotate=true only for an intentional key rotation.'
+      });
+    }
+
+    return {
+      token: issued.token,
+      accessKey,
+      security: {
+        plaintextStored: false,
+        singleUse: true,
+        rotationRequiredForReplacement: true
+      }
+    };
+  });
+
+  app.post('/v1/me/access-keys/redeem', async (request, reply) => {
+    const userId = await deps.requireUserId(request);
+    const parsed = accessKeyRedeemSchema.safeParse(request.body);
+    if (!parsed.success) {
+      return reply.code(400).send({ error: 'INVALID_ACCESS_KEY' });
+    }
+
+    const tokenHash = hashAccessKey(parsed.data.accessKey);
+    const token = await prisma.accessRedemptionToken.findUnique({
+      where: { tokenHash },
+      include: {
+        entitlement: {
+          include: {
+            product: {
+              select: {
+                code: true,
+                name: true,
+                kind: true,
+                deliveryType: true
+              }
+            }
+          }
+        }
+      }
+    });
+
+    if (!token || token.entitlement.userId !== userId) {
+      return reply.code(400).send({ error: 'INVALID_ACCESS_KEY' });
+    }
+    if (token.status !== 'ISSUED') {
+      return reply.code(409).send({ error: 'ACCESS_KEY_NOT_ACTIVE' });
+    }
+    if (token.expiresAt <= new Date()) {
+      await prisma.accessRedemptionToken.update({
+        where: { id: token.id },
+        data: { status: 'EXPIRED' }
+      });
+      return reply.code(410).send({ error: 'ACCESS_KEY_EXPIRED' });
+    }
+    if (token.entitlement.status !== 'ACTIVE') {
+      return reply.code(409).send({ error: 'ENTITLEMENT_NOT_ACTIVE' });
+    }
+
+    const now = new Date();
+    const redeemed = await prisma.$transaction(async (tx) => {
+      const updated = await tx.accessRedemptionToken.updateMany({
+        where: {
+          id: token.id,
+          status: 'ISSUED',
+          expiresAt: { gt: now }
+        },
+        data: {
+          status: 'REDEEMED',
+          redeemedAt: now
+        }
+      });
+
+      if (updated.count !== 1) return false;
+
+      await tx.auditEvent.create({
+        data: {
+          userId,
+          actorType: 'USER',
+          action: 'ACCESS_KEY_REDEEMED',
+          entity: 'AccessRedemptionToken',
+          entityId: token.id,
+          metadata: {
+            entitlementId: token.entitlementId,
+            productCode: token.entitlement.product.code,
+            purpose: token.purpose
+          }
+        }
+      });
+
+      return true;
+    });
+
+    if (!redeemed) {
+      return reply.code(409).send({ error: 'ACCESS_KEY_NOT_ACTIVE' });
+    }
+
+    return {
+      status: 'REDEEMED',
+      entitlement: {
+        id: token.entitlement.id,
+        product: token.entitlement.product,
+        grantedAt: token.entitlement.grantedAt
+      }
+    };
+  });
+
   app.post('/v1/orders', async (request, reply) => {
     const userId = await deps.requireUserId(request);
     const parsed = orderSchema.safeParse(request.body);
@@ -292,9 +956,18 @@ export async function registerCommerceRoutes(
       });
     }
 
-    const product = await prisma.commerceProduct.findUnique({
-      where: { code: parsed.data.productCode }
-    });
+    const [product, buyer] = await Promise.all([
+      prisma.commerceProduct.findUnique({
+        where: { code: parsed.data.productCode }
+      }),
+      prisma.user.findUnique({
+        where: { id: userId },
+        select: {
+          email: true,
+          emailVerifiedAt: true
+        }
+      })
+    ]);
 
     if (!product || !product.active) {
       return reply.code(404).send({ error: 'PRODUCT_NOT_AVAILABLE' });
@@ -302,6 +975,29 @@ export async function registerCommerceRoutes(
     if (product.priceGrossGrosz === null) {
       return reply.code(409).send({ error: 'PRODUCT_PRICE_NOT_CONFIGURED' });
     }
+    if (
+      ['DIGITAL', 'HYBRID'].includes(product.deliveryType) &&
+      (!buyer?.email || !buyer.emailVerifiedAt)
+    ) {
+      return reply.code(409).send({
+        error: 'VERIFIED_EMAIL_REQUIRED_FOR_DIGITAL_DELIVERY'
+      });
+    }
+    if (
+      !['CONFIRMED', 'WIS_CONFIRMED'].includes(product.taxClassificationStatus) ||
+      product.vatRateBps === null ||
+      product.supplyModel === 'UNCLASSIFIED' ||
+      !product.deliveryContractVersion
+    ) {
+      return reply.code(409).send({
+        error: 'PRODUCT_TAX_OR_DELIVERY_CLASSIFICATION_REQUIRED'
+      });
+    }
+
+    const tax = calculateTaxFromGross(
+      product.priceGrossGrosz,
+      product.vatRateBps
+    );
 
     const acceptance = await prisma.auditEvent.findFirst({
       where: {
@@ -338,6 +1034,13 @@ export async function registerCommerceRoutes(
         status: 'PENDING_PAYMENT',
         currency: product.currency,
         amountGrossGrosz: product.priceGrossGrosz,
+        amountNetGrosz: tax.amountNetGrosz,
+        amountVatGrosz: tax.amountVatGrosz,
+        vatRateBps: product.vatRateBps,
+        taxClassificationRef: product.taxClassificationRef,
+        taxClassificationStatus: product.taxClassificationStatus,
+        supplyModel: product.supplyModel,
+        deliveryContractVersion: product.deliveryContractVersion,
         legalVersion: LEGAL_VERSION,
         legalAcceptanceId: acceptance.id,
         provider
@@ -353,14 +1056,412 @@ export async function registerCommerceRoutes(
       }
     });
 
-    return reply.code(201).send({
-      order,
-      checkout: {
-        provider,
-        checkoutUrl: null,
-        status: 'PROVIDER_ADAPTER_REQUIRED'
+    if (provider === 'STRIPE') {
+      const stripeMetadata = readStripeProductMetadata(product.metadata);
+
+      if (
+        stripePaymentLinkModeEnabled() &&
+        stripeMetadata.paymentLinkUrl
+      ) {
+        const checkoutUrl = new URL(stripeMetadata.paymentLinkUrl);
+        checkoutUrl.searchParams.set('client_reference_id', stripeClientReferenceId(order.id));
+
+        return reply.code(201).send({
+          order,
+          checkout: {
+            provider,
+            checkoutUrl: checkoutUrl.toString(),
+            checkoutId: stripeMetadata.paymentLinkId,
+            status: 'READY',
+            mode: 'PAYMENT_LINK'
+          }
+        });
+      }
+
+      try {
+        const session = await stripeCreateCheckoutSession({
+          orderId: order.id,
+          userId,
+          productName: product.name,
+          amountGrossGrosz: product.priceGrossGrosz,
+          currency: product.currency
+        });
+
+        const updatedOrder = await prisma.commerceOrder.update({
+          where: { id: order.id },
+          data: {
+            providerCheckoutId: session.id
+          },
+          include: {
+            product: {
+              select: {
+                code: true,
+                name: true,
+                deliveryType: true
+              }
+            }
+          }
+        });
+
+        return reply.code(201).send({
+          order: updatedOrder,
+          checkout: {
+            provider,
+            checkoutUrl: session.url,
+            checkoutId: session.id,
+            status: 'READY',
+            mode: 'CHECKOUT_SESSION'
+          }
+        });
+      } catch (error) {
+        await prisma.commerceOrder.update({
+          where: { id: order.id },
+          data: { status: 'PAYMENT_SETUP_FAILED' }
+        });
+        throw error;
+      }
+    }
+
+    return reply.code(409).send({
+      error: 'PAYMENT_PROVIDER_ADAPTER_NOT_IMPLEMENTED',
+      provider
+    });
+  });
+
+  app.post(
+    '/v1/payments/stripe/webhook',
+    { config: { rawBody: true } },
+    async (request, reply) => {
+      const signature = request.headers['stripe-signature'];
+      const rawBody = (request as FastifyRequestWithRawBody).rawBody;
+
+      if (typeof signature !== 'string' || !rawBody) {
+        return reply.code(400).send({ error: 'STRIPE_SIGNATURE_REQUIRED' });
+      }
+
+      if (
+        !verifyStripeSignature(
+          rawBody,
+          signature,
+          stripeWebhookSecret()
+        )
+      ) {
+        return reply.code(400).send({ error: 'INVALID_STRIPE_SIGNATURE' });
+      }
+
+      let event: StripeWebhookEnvelope;
+      try {
+        event = JSON.parse(rawBody.toString('utf8')) as StripeWebhookEnvelope;
+      } catch {
+        return reply.code(400).send({ error: 'INVALID_STRIPE_EVENT_JSON' });
+      }
+
+      if (!event.id || !event.type || !event.data?.object) {
+        return reply.code(400).send({ error: 'INVALID_STRIPE_EVENT' });
+      }
+
+      const occurredAt = new Date(event.created * 1000);
+
+      if (
+        [
+          'checkout.session.completed',
+          'checkout.session.async_payment_succeeded',
+          'checkout.session.async_payment_failed'
+        ].includes(event.type)
+      ) {
+        const session = event.data.object as StripeCheckoutSession;
+        const orderId = orderIdFromStripeClientReference(
+          typeof session.client_reference_id === 'string'
+            ? session.client_reference_id
+            : null
+        );
+
+        if (!orderId) {
+          return {
+            received: true,
+            ignored: true,
+            reason: 'NO_CLIENT_REFERENCE'
+          };
+        }
+
+        const order = await prisma.commerceOrder.findUnique({
+          where: { id: orderId },
+          include: { product: true }
+        });
+
+        if (!order || order.provider !== 'STRIPE') {
+          return {
+            received: true,
+            ignored: true,
+            reason: 'ORDER_NOT_MANAGED_BY_DORADCYPRO'
+          };
+        }
+
+        const expectedLink = readStripeProductMetadata(order.product.metadata);
+        const eventPaymentLinkId =
+          typeof session.payment_link === 'string'
+            ? session.payment_link
+            : session.payment_link?.id ?? null;
+
+        if (
+          expectedLink.paymentLinkId &&
+          eventPaymentLinkId &&
+          expectedLink.paymentLinkId !== eventPaymentLinkId
+        ) {
+          return reply.code(409).send({
+            error: 'STRIPE_PAYMENT_LINK_MISMATCH'
+          });
+        }
+
+        const currency = String(session.currency ?? '').toUpperCase();
+        const amount = Number(session.amount_total ?? -1);
+
+        if (currency !== order.currency) {
+          return reply.code(409).send({
+            error: 'STRIPE_CURRENCY_MISMATCH'
+          });
+        }
+        if (amount !== order.amountGrossGrosz) {
+          return reply.code(409).send({
+            error: 'STRIPE_AMOUNT_MISMATCH'
+          });
+        }
+
+        await prisma.commerceOrder.update({
+          where: { id: order.id },
+          data: {
+            providerCheckoutId: session.id
+          }
+        });
+
+        if (
+          event.type === 'checkout.session.completed' &&
+          session.payment_status === 'unpaid'
+        ) {
+          return {
+            received: true,
+            pending: true,
+            orderId: order.id
+          };
+        }
+
+        const paymentIntentId =
+          typeof session.payment_intent === 'string'
+            ? session.payment_intent
+            : session.payment_intent?.id || session.id;
+
+        const status =
+          event.type === 'checkout.session.async_payment_failed'
+            ? 'FAILED'
+            : session.payment_status === 'paid'
+              ? 'COMPLETED'
+              : 'PENDING';
+
+        const workerSecret = process.env.INTERNAL_WORKER_SECRET;
+        if (!workerSecret) {
+          throw Object.assign(
+            new Error('INTERNAL_WORKER_SECRET_NOT_CONFIGURED'),
+            { statusCode: 500 }
+          );
+        }
+
+        const recorded = await app.inject({
+          method: 'POST',
+          url: '/v1/internal/payments/record',
+          headers: {
+            'content-type': 'application/json',
+            'x-worker-secret': workerSecret
+          },
+          payload: {
+            provider: 'STRIPE',
+            providerEventId: event.id,
+            eventType: event.type,
+            providerPaymentId: paymentIntentId,
+            orderId: order.id,
+            status,
+            currency: order.currency,
+            amountReceivedGrosz:
+              status === 'COMPLETED' ? order.amountGrossGrosz : 0,
+            refundedGrosz: 0,
+            occurredAt: occurredAt.toISOString(),
+            isTest: !event.livemode,
+            metadata: {
+              stripeSessionId: session.id,
+              paymentLinkId: eventPaymentLinkId,
+              deliveryMode: 'WEBHOOK'
+            }
+          }
+        });
+
+        if (recorded.statusCode >= 400) {
+          return reply.code(recorded.statusCode).send(recorded.json());
+        }
+
+        const paymentResult = recorded.json();
+        const fulfillment =
+          status === 'COMPLETED'
+            ? await deliverPaidDigitalAccess(app, order.id)
+            : null;
+
+        return {
+          received: true,
+          payment: paymentResult,
+          fulfillment
+        };
+      }
+
+      if (event.type === 'charge.refunded') {
+        const charge = event.data.object as Record<string, unknown>;
+        const paymentIntentId =
+          typeof charge.payment_intent === 'string'
+            ? charge.payment_intent
+            : null;
+
+        if (!paymentIntentId) {
+          return {
+            received: true,
+            ignored: true,
+            reason: 'REFUND_WITHOUT_PAYMENT_INTENT'
+          };
+        }
+
+        const payment = await prisma.paymentRecord.findUnique({
+          where: {
+            provider_providerPaymentId: {
+              provider: 'STRIPE',
+              providerPaymentId: paymentIntentId
+            }
+          }
+        });
+
+        if (!payment) {
+          return {
+            received: true,
+            ignored: true,
+            reason: 'PAYMENT_NOT_MANAGED_BY_DORADCYPRO'
+          };
+        }
+
+        const amount = Number(charge.amount ?? payment.amountReceivedGrosz);
+        const amountRefunded = Number(charge.amount_refunded ?? 0);
+        const currency = String(charge.currency ?? payment.currency).toUpperCase();
+        const fullyRefunded =
+          charge.refunded === true ||
+          (amount > 0 && amountRefunded >= amount);
+
+        const workerSecret = process.env.INTERNAL_WORKER_SECRET;
+        if (!workerSecret) {
+          throw Object.assign(
+            new Error('INTERNAL_WORKER_SECRET_NOT_CONFIGURED'),
+            { statusCode: 500 }
+          );
+        }
+
+        const recorded = await app.inject({
+          method: 'POST',
+          url: '/v1/internal/payments/record',
+          headers: {
+            'content-type': 'application/json',
+            'x-worker-secret': workerSecret
+          },
+          payload: {
+            provider: 'STRIPE',
+            providerEventId: event.id,
+            eventType: event.type,
+            providerPaymentId: paymentIntentId,
+            orderId: payment.orderId,
+            status: fullyRefunded ? 'REFUNDED' : 'PARTIALLY_REFUNDED',
+            currency,
+            amountReceivedGrosz: payment.amountReceivedGrosz,
+            refundedGrosz: amountRefunded,
+            occurredAt: occurredAt.toISOString(),
+            isTest: !event.livemode,
+            metadata: {
+              stripeChargeId:
+                typeof charge.id === 'string' ? charge.id : null,
+              deliveryMode: 'WEBHOOK'
+            }
+          }
+        });
+
+        return reply.code(recorded.statusCode).send(recorded.json());
+      }
+
+      return {
+        received: true,
+        ignored: true,
+        eventType: event.type
+      };
+    }
+  );
+
+  app.post('/v1/payments/stripe/confirm', async (request, reply) => {
+    const userId = await deps.requireUserId(request);
+    const parsed = z.object({
+      orderId: z.string().trim().min(1).max(240),
+      sessionId: z.string().trim().min(1).max(300)
+    }).safeParse(request.body);
+
+    if (!parsed.success) {
+      return reply.code(400).send({ error: 'INVALID_STRIPE_CONFIRMATION' });
+    }
+
+    const order = await prisma.commerceOrder.findFirst({
+      where: {
+        id: parsed.data.orderId,
+        userId
+      },
+      include: {
+        entitlements: {
+          where: { status: 'ACTIVE' },
+          select: { id: true, grantedAt: true }
+        }
       }
     });
+
+    if (!order) {
+      return reply.code(404).send({ error: 'ORDER_NOT_FOUND' });
+    }
+    if (order.provider !== 'STRIPE') {
+      return reply.code(409).send({ error: 'ORDER_PROVIDER_MISMATCH' });
+    }
+
+    if (!process.env.STRIPE_SECRET_KEY?.trim()) {
+      return {
+        orderId: order.id,
+        orderStatus: order.status,
+        entitlementActive: order.entitlements.length > 0,
+        fulfillmentSource: 'SIGNED_STRIPE_WEBHOOK',
+        sessionLookup: 'UNAVAILABLE_WITH_PAYMENT_LINK_MODE'
+      };
+    }
+
+    if (
+      order.providerCheckoutId &&
+      order.providerCheckoutId !== parsed.data.sessionId
+    ) {
+      return reply.code(409).send({ error: 'STRIPE_SESSION_MISMATCH' });
+    }
+
+    const session = await stripeGetCheckoutSession(parsed.data.sessionId);
+
+    if (orderIdFromStripeClientReference(session.client_reference_id) !== order.id) {
+      return reply.code(409).send({ error: 'STRIPE_ORDER_REFERENCE_MISMATCH' });
+    }
+    if ((session.currency || '').toUpperCase() !== order.currency) {
+      return reply.code(409).send({ error: 'STRIPE_CURRENCY_MISMATCH' });
+    }
+    if (session.amount_total !== order.amountGrossGrosz) {
+      return reply.code(409).send({ error: 'STRIPE_AMOUNT_MISMATCH' });
+    }
+
+    return {
+      orderId: order.id,
+      orderStatus: order.status,
+      stripePaymentStatus: session.payment_status ?? null,
+      entitlementActive: order.entitlements.length > 0,
+      fulfillmentSource: 'SIGNED_STRIPE_WEBHOOK'
+    };
   });
 
   app.get('/v1/admin/commerce/access', async (request) => {
@@ -448,6 +1549,12 @@ export async function registerCommerceRoutes(
         priceGrossGrosz: input.priceGrossGrosz,
         currency: input.currency,
         deliveryType: input.deliveryType,
+        supplyModel: input.supplyModel,
+        taxClassificationStatus: input.taxClassificationStatus,
+        vatRateBps: input.vatRateBps ?? null,
+        taxClassificationRef: input.taxClassificationRef ?? null,
+        taxReviewedAt: input.taxReviewedAt ? new Date(input.taxReviewedAt) : null,
+        deliveryContractVersion: input.deliveryContractVersion ?? null,
         metadata: (input.metadata ?? undefined) as any
       },
       create: {
@@ -459,6 +1566,12 @@ export async function registerCommerceRoutes(
         priceGrossGrosz: input.priceGrossGrosz,
         currency: input.currency,
         deliveryType: input.deliveryType,
+        supplyModel: input.supplyModel,
+        taxClassificationStatus: input.taxClassificationStatus,
+        vatRateBps: input.vatRateBps ?? null,
+        taxClassificationRef: input.taxClassificationRef ?? null,
+        taxReviewedAt: input.taxReviewedAt ? new Date(input.taxReviewedAt) : null,
+        deliveryContractVersion: input.deliveryContractVersion ?? null,
         metadata: (input.metadata ?? undefined) as any
       }
     });
@@ -477,8 +1590,7 @@ export async function registerCommerceRoutes(
     }
 
     const input = parsed.data;
-    const payloadSha256 = crypto
-      .createHash('sha256')
+    const payloadSha256 = createHash('sha256')
       .update(JSON.stringify(input))
       .digest('hex');
 
@@ -652,6 +1764,23 @@ export async function registerCommerceRoutes(
             revokedAt: occurredAt
           }
         });
+
+        const refundedEntitlements = await tx.entitlement.findMany({
+          where: { orderId: order.id },
+          select: { id: true }
+        });
+        if (refundedEntitlements.length > 0) {
+          await tx.accessRedemptionToken.updateMany({
+            where: {
+              entitlementId: { in: refundedEntitlements.map((item) => item.id) },
+              status: 'ISSUED'
+            },
+            data: {
+              status: 'REVOKED',
+              revokedAt: occurredAt
+            }
+          });
+        }
       }
 
       if (['FAILED', 'CANCELLED'].includes(input.status) && order.status !== 'PAID') {

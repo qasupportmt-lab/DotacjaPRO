@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useMemo, useState } from 'react';
+import ProductGateway, { type PlatformProduct } from './components/ProductGateway';
 
 declare global {
   interface Window {
@@ -21,7 +22,7 @@ const VOIVODESHIPS = [
   'świętokrzyskie','warmińsko-mazurskie','wielkopolskie','zachodniopomorskie'
 ];
 
-type Step = 'welcome' | 'legal' | 'region' | 'email' | 'employment' | 'business' | 'done';
+type Step = 'welcome' | 'legal' | 'gateway' | 'region' | 'email' | 'employment' | 'business' | 'done';
 
 type LocalCriteriaSet = {
   id: string;
@@ -182,6 +183,50 @@ type AdminAccountingSummary = {
 };
 
 
+type CommerceProductView = {
+  code: string;
+  name: string;
+  description: string | null;
+  kind: string;
+  priceGrossGrosz: number;
+  currency: string;
+  deliveryType: string;
+};
+
+type CheckoutReadinessView = {
+  ready: boolean;
+  blockedReason: string | null;
+  payment?: {
+    provider?: string | null;
+    stripeMode?: string | null;
+  };
+};
+
+type CommerceOrderStatusView = {
+  id: string;
+  status: string;
+  amountGrossGrosz: number;
+  currency: string;
+  product: {
+    code: string;
+    name: string;
+    deliveryType: string;
+  };
+  payments: Array<{
+    status: string;
+    amountReceivedGrosz: number;
+    refundedGrosz: number;
+    receivedAt: string | null;
+    refundedAt: string | null;
+  }>;
+  entitlements: Array<{
+    id: string;
+    status: string;
+    grantedAt: string;
+  }>;
+};
+
+
 
 const API = process.env.NEXT_PUBLIC_API_BASE_URL ?? 'http://localhost:4000';
 
@@ -252,6 +297,14 @@ export default function Home() {
   const [supportBusy, setSupportBusy] = useState(false);
   const [supportReportId, setSupportReportId] = useState<string | null>(null);
   const [supportError, setSupportError] = useState<string | null>(null);
+  const [commerceProducts, setCommerceProducts] = useState<CommerceProductView[]>([]);
+  const [checkoutReadiness, setCheckoutReadiness] = useState<CheckoutReadinessView | null>(null);
+  const [checkoutTermsAccepted, setCheckoutTermsAccepted] = useState(false);
+  const [checkoutImmediateConsent, setCheckoutImmediateConsent] = useState(false);
+  const [checkoutWithdrawalAcknowledged, setCheckoutWithdrawalAcknowledged] = useState(false);
+  const [checkoutBusyCode, setCheckoutBusyCode] = useState<string | null>(null);
+  const [checkoutMessage, setCheckoutMessage] = useState<string | null>(null);
+  const [checkoutOrder, setCheckoutOrder] = useState<CommerceOrderStatusView | null>(null);
 
   const authHeaders = useMemo(
     () => token ? { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' } : undefined,
@@ -301,6 +354,73 @@ export default function Home() {
       void restoreSession(savedToken);
     }
   }, []);
+
+
+  useEffect(() => {
+    if (!token) return;
+
+    void loadCommerceCatalog();
+
+    const params = new URLSearchParams(window.location.search);
+    const checkoutState = params.get('checkout');
+    const pendingOrderId =
+      params.get('order_id') ||
+      window.localStorage.getItem('doradcypro.pendingOrderId');
+
+    if (checkoutState === 'cancel') {
+      setCheckoutMessage('Płatność została anulowana. Zamówienie nie zostało opłacone.');
+      window.localStorage.removeItem('doradcypro.pendingOrderId');
+      return;
+    }
+
+    if (checkoutState !== 'success' || !pendingOrderId) return;
+
+    setCheckoutMessage('Płatność wróciła ze Stripe. Czekam na podpisane potwierdzenie webhooka…');
+
+    let attempts = 0;
+    const poll = async () => {
+      attempts += 1;
+      const order = await loadCommerceOrder(pendingOrderId);
+      if (order?.status === 'PAID') {
+        setCheckoutMessage('Płatność potwierdzona. Dostęp został aktywowany.');
+        window.localStorage.removeItem('doradcypro.pendingOrderId');
+        const cleanUrl = new URL(window.location.href);
+        cleanUrl.searchParams.delete('checkout');
+        cleanUrl.searchParams.delete('order_id');
+        cleanUrl.searchParams.delete('session_id');
+        window.history.replaceState({}, '', cleanUrl.toString());
+        return true;
+      }
+
+      if (order?.status === 'REFUNDED' || order?.status === 'CANCELLED') {
+        setCheckoutMessage(
+          order.status === 'REFUNDED'
+            ? 'Płatność została zwrócona.'
+            : 'Zamówienie zostało anulowane.'
+        );
+        window.localStorage.removeItem('doradcypro.pendingOrderId');
+        return true;
+      }
+
+      return false;
+    };
+
+    void poll();
+
+    const timer = window.setInterval(async () => {
+      const done = await poll();
+      if (done || attempts >= 12) {
+        window.clearInterval(timer);
+        if (!done) {
+          setCheckoutMessage(
+            'Stripe przyjął powrót z płatności, ale potwierdzenie serwerowe jeszcze nie dotarło. Odśwież status za chwilę.'
+          );
+        }
+      }
+    }, 2500);
+
+    return () => window.clearInterval(timer);
+  }, [token]);
 
   useEffect(() => {
     if (
@@ -448,6 +568,154 @@ export default function Home() {
     };
   }, [step, region.voivodeship, region.city]);
 
+  function formatPriceGrosz(value: number, currency = 'PLN') {
+    return new Intl.NumberFormat('pl-PL', {
+      style: 'currency',
+      currency
+    }).format(value / 100);
+  }
+
+  async function loadCommerceCatalog() {
+    try {
+      const [productsResponse, readinessResponse] = await Promise.all([
+        fetch(`${API}/v1/products`, { cache: 'no-store' }),
+        fetch(`${API}/v1/checkout/readiness`, { cache: 'no-store' })
+      ]);
+
+      if (productsResponse.ok) {
+        const productsData = await productsResponse.json();
+        setCommerceProducts(
+          Array.isArray(productsData?.products) ? productsData.products : []
+        );
+      }
+
+      if (readinessResponse.ok) {
+        setCheckoutReadiness(await readinessResponse.json());
+      }
+    } catch {
+      setCheckoutReadiness({
+        ready: false,
+        blockedReason: 'CHECKOUT_UNAVAILABLE'
+      });
+    }
+  }
+
+  async function loadCommerceOrder(orderId: string) {
+    if (!token) return null;
+
+    try {
+      const response = await fetch(
+        `${API}/v1/me/orders/${encodeURIComponent(orderId)}`,
+        { headers: authHeaders }
+      );
+
+      if (!response.ok) return null;
+      const data = await response.json();
+      const order = data.order as CommerceOrderStatusView;
+      setCheckoutOrder(order);
+      return order;
+    } catch {
+      return null;
+    }
+  }
+
+  async function startProductCheckout(product: CommerceProductView) {
+    if (!token || !legalVersion) return;
+
+    if (!checkoutReadiness?.ready) {
+      setCheckoutMessage('Płatności dla tego produktu nie są jeszcze aktywne.');
+      return;
+    }
+
+    if (
+      !checkoutTermsAccepted ||
+      !checkoutImmediateConsent ||
+      !checkoutWithdrawalAcknowledged
+    ) {
+      setCheckoutMessage(
+        'Przed płatnością zaakceptuj warunki zakupu oraz wymagane potwierdzenia dotyczące treści cyfrowej.'
+      );
+      return;
+    }
+
+    setCheckoutBusyCode(product.code);
+    setCheckoutMessage(null);
+    setError(null);
+
+    try {
+      const acceptanceResponse = await fetch(
+        `${API}/v1/me/legal-acceptances`,
+        {
+          method: 'POST',
+          headers: authHeaders,
+          body: JSON.stringify({
+            version: legalVersion,
+            termsAccepted: true,
+            licenseAccepted: true,
+            privacyAcknowledged: true,
+            digitalImmediateConsent: true,
+            withdrawalAcknowledged: true,
+            context: 'CHECKOUT',
+            purchaseReference: product.code
+          })
+        }
+      );
+
+      const acceptanceData = await acceptanceResponse.json().catch(() => ({}));
+      if (!acceptanceResponse.ok || !acceptanceData.acceptanceId) {
+        throw new Error(
+          acceptanceData.error === 'DIGITAL_CONTENT_CONSENT_REQUIRED'
+            ? 'Brak wymaganych zgód dla treści cyfrowej.'
+            : 'Nie udało się zapisać zgód dla zakupu.'
+        );
+      }
+
+      const orderResponse = await fetch(`${API}/v1/orders`, {
+        method: 'POST',
+        headers: authHeaders,
+        body: JSON.stringify({
+          productCode: product.code,
+          legalAcceptanceId: acceptanceData.acceptanceId
+        })
+      });
+
+      const orderData = await orderResponse.json().catch(() => ({}));
+      if (!orderResponse.ok) {
+        if (orderData.error === 'VERIFIED_EMAIL_REQUIRED_FOR_DIGITAL_DELIVERY') {
+          throw new Error(
+            'Przed zakupem produktu cyfrowego zweryfikuj adres e-mail na koncie.'
+          );
+        }
+        if (orderData.error === 'PRODUCT_TAX_OR_DELIVERY_CLASSIFICATION_REQUIRED') {
+          throw new Error(
+            'Ten produkt nie przeszedł jeszcze pełnej klasyfikacji podatkowej i dostawy.'
+          );
+        }
+        throw new Error(
+          orderData.blockedReason
+            ? `Płatność jest chwilowo zablokowana: ${orderData.blockedReason}`
+            : 'Nie udało się utworzyć płatności.'
+        );
+      }
+
+      const orderId = orderData.order?.id;
+      const checkoutUrl = orderData.checkout?.checkoutUrl;
+
+      if (!orderId || !checkoutUrl) {
+        throw new Error('Stripe nie zwrócił gotowego adresu płatności.');
+      }
+
+      window.localStorage.setItem('doradcypro.pendingOrderId', orderId);
+      window.location.assign(checkoutUrl);
+    } catch (e) {
+      setCheckoutMessage(
+        e instanceof Error ? e.message : 'Nie udało się rozpocząć płatności.'
+      );
+    } finally {
+      setCheckoutBusyCode(null);
+    }
+  }
+
   async function loadCurrentLegal() {
     try {
       const res = await fetch(`${API}/v1/legal/current`, {
@@ -488,7 +756,7 @@ export default function Home() {
       if (data.legalVersion) setLegalVersion(data.legalVersion);
       setStep('legal');
     } else {
-      setStep('region');
+      setStep('gateway');
     }
   }
 
@@ -528,7 +796,7 @@ export default function Home() {
         throw new Error('Nie udało się zapisać akceptacji aktualnych warunków.');
       }
 
-      setStep('region');
+      setStep('gateway');
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Błąd zapisu zgód');
     } finally {
@@ -585,7 +853,7 @@ export default function Home() {
         if (data.legalVersion) setLegalVersion(data.legalVersion);
         setStep('legal');
       } else {
-        setStep('region');
+        setStep('gateway');
       }
     } catch {
       window.localStorage.removeItem('dotacjapro.session');
@@ -1329,6 +1597,17 @@ export default function Home() {
     }
   }
 
+  function selectPlatformProduct(product: PlatformProduct) {
+    if (product.availability !== 'ACTIVE') return;
+
+    if (product.code === 'GRANTS' || product.code === 'DOCUMENTS') {
+      setStep('region');
+      return;
+    }
+
+    setError('Ten moduł nie jest jeszcze aktywny produkcyjnie.');
+  }
+
   async function startCase() {
     if (!token) return;
     setBusy(true);
@@ -1425,6 +1704,7 @@ export default function Home() {
   const progressed: Record<Step, number> = {
     welcome: 0,
     legal: 0,
+    gateway: 0,
     region: 1,
     email: 2,
     employment: 3,
@@ -1435,15 +1715,17 @@ export default function Home() {
 
   return (
     <main className="shell">
-      <section className="brand">
-        <span className="eyebrow">DORADCAPRO</span>
-        <h1>Twoja droga do finansowania firmy</h1>
-        <p>Ustalimy Twój region i sytuację, dopasujemy programy, a dokumenty przygotujemy wyłącznie na aktualnych, oficjalnych formularzach.</p>
-      </section>
+      {step !== 'gateway' && (
+        <section className="brand">
+          <span className="eyebrow">doradcyPRO</span>
+          <h1>Twoja droga do finansowania firmy</h1>
+          <p>Ustalimy Twój region i sytuację, dopasujemy programy, a dokumenty przygotujemy wyłącznie na aktualnych, oficjalnych formularzach.</p>
+        </section>
+      )}
 
       {token && (
         <section className="session-toolbar">
-          <span>{authChannel === 'telegram' ? 'Połączono przez MT' : 'Zalogowano do DoradcaPRO'}</span>
+          <span>{authChannel === 'telegram' ? 'Połączono przez MT' : 'Zalogowano do doradcyPRO'}</span>
           <button className="secondary compact" onClick={logout}>
             Wyloguj
           </button>
@@ -1647,15 +1929,19 @@ export default function Home() {
         </section>
       )}
 
-      <section className="card">
+      {step === 'gateway' && token && (
+        <ProductGateway apiBaseUrl={API} onSelect={selectPlatformProduct} />
+      )}
+
+      <section className={step === 'gateway' ? 'card hidden-card' : 'card'}>
         <div className="progress">
           {[1,2,3,4,5].map((n) => <span key={n} className={progressValue >= n ? 'active' : ''}></span>)}
         </div>
 
         {step === 'welcome' && <>
-          <h2>Zaloguj się do DoradcaPRO</h2>
+          <h2>Zaloguj się do doradcyPRO</h2>
           <p>
-            Konto DoradcaPRO działa w Safari, Chrome i innych nowoczesnych przeglądarkach.
+            Konto doradcyPRO działa w Safari, Chrome i innych nowoczesnych przeglądarkach.
           </p>
 
           <div className="auth-tabs">
@@ -1720,7 +2006,7 @@ export default function Home() {
                   onChange={(e) => setLegalTermsAccepted(e.target.checked)}
                 />
                 <span>
-                  Akceptuję <a href="/legal" target="_blank" rel="noreferrer">Regulamin DoradcaPRO</a>.
+                  Akceptuję <a href="/legal" target="_blank" rel="noreferrer">Regulamin doradcyPRO</a>.
                 </span>
               </label>
               <label className="legal-check">
@@ -1801,7 +2087,7 @@ export default function Home() {
                 onChange={(e) => setLegalTermsAccepted(e.target.checked)}
               />
               <span>
-                Akceptuję <a href="/legal" target="_blank" rel="noreferrer">Regulamin DoradcaPRO</a>.
+                Akceptuję <a href="/legal" target="_blank" rel="noreferrer">Regulamin doradcyPRO</a>.
               </span>
             </label>
             <label className="legal-check">
@@ -1963,7 +2249,7 @@ export default function Home() {
                       <p>{candidate.reason}</p>
                       <p className="call-meta">
                         {candidate.requiresVerifiedCall
-                          ? 'DoradcaPRO pokaże konkretny nabór dopiero po weryfikacji jego oficjalnych zasad.'
+                          ? 'doradcyPRO pokaże konkretny nabór dopiero po weryfikacji jego oficjalnych zasad.'
                           : 'Warunki tej ścieżki są weryfikowane przed przedstawieniem konkretnej oferty.'}
                       </p>
                       {candidate.program?.officialUrl && (
@@ -2235,7 +2521,7 @@ export default function Home() {
 
                         {officialForms.length === 0 ? (
                           <p className="muted-box">
-                            Nie ma jeszcze zweryfikowanego mapowania formularza dla tego naboru. DoradcaPRO nie utworzy własnego zamiennika.
+                            Nie ma jeszcze zweryfikowanego mapowania formularza dla tego naboru. doradcyPRO nie utworzy własnego zamiennika.
                           </p>
                         ) : (
                           <div className="forms-list">
@@ -2358,7 +2644,7 @@ export default function Home() {
                                           </p>
                                         )}
                                         {['QUEUED', 'PROCESSING'].includes(renderJob.status) && (
-                                          <p>DoradcaPRO wypełnia kopię aktualnego formularza urzędowego.</p>
+                                          <p>doradcyPRO wypełnia kopię aktualnego formularza urzędowego.</p>
                                         )}
                                       </div>
                                     )}
@@ -2373,7 +2659,7 @@ export default function Home() {
                       <div className="package-panel">
                         <h3>Gotowy komplet</h3>
                         <p>
-                          DoradcaPRO wyśle ZIP z wymaganymi formularzami, instrukcją do wydruku
+                          doradcyPRO wyśle ZIP z wymaganymi formularzami, instrukcją do wydruku
                           i manifestem wersji dokumentów na Twój zweryfikowany e-mail.
                         </p>
                         <button
@@ -2410,6 +2696,116 @@ export default function Home() {
               </p>
             )}
           </> : <p>Profil jest gotowy do dalszej kwalifikacji i monitorowania aktualnych naborów.</p>}
+
+          {(commerceProducts.length > 0 || checkoutMessage || checkoutOrder) && (
+            <section className="commerce-panel">
+              <div className="commerce-head">
+                <div>
+                  <span className="eyebrow">ZAKUP I DOSTĘP</span>
+                  <h2>Produkty doradcyPRO</h2>
+                </div>
+                {checkoutReadiness && (
+                  <span className={checkoutReadiness.ready ? 'verified' : 'qualification-status'}>
+                    {checkoutReadiness.ready ? 'Płatności aktywne' : 'Płatności w przygotowaniu'}
+                  </span>
+                )}
+              </div>
+
+              {checkoutOrder && (
+                <div className="commerce-order-state">
+                  <strong>{checkoutOrder.product.name}</strong>
+                  <p>
+                    Status zamówienia: <b>{checkoutOrder.status}</b>
+                    {' · '}
+                    {formatPriceGrosz(checkoutOrder.amountGrossGrosz, checkoutOrder.currency)}
+                  </p>
+                  {checkoutOrder.entitlements.length > 0 && (
+                    <p className="verified">
+                      ✓ Dostęp aktywny. Klucz aktywacyjny jest wysyłany na zweryfikowany adres e-mail.
+                    </p>
+                  )}
+                </div>
+              )}
+
+              {commerceProducts.length > 0 && (
+                <>
+                  <div className="commerce-products">
+                    {commerceProducts.map((product) => (
+                      <article className="commerce-product" key={product.code}>
+                        <div>
+                          <strong>{product.name}</strong>
+                          {product.description && <p>{product.description}</p>}
+                        </div>
+                        <div className="commerce-price">
+                          {formatPriceGrosz(product.priceGrossGrosz, product.currency)}
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => startProductCheckout(product)}
+                          disabled={
+                            !checkoutReadiness?.ready ||
+                            checkoutBusyCode !== null ||
+                            !checkoutTermsAccepted ||
+                            !checkoutImmediateConsent ||
+                            !checkoutWithdrawalAcknowledged
+                          }
+                        >
+                          {checkoutBusyCode === product.code
+                            ? 'Przekierowanie do Stripe…'
+                            : 'Kup teraz'}
+                        </button>
+                      </article>
+                    ))}
+                  </div>
+
+                  <div className="checkout-consents">
+                    <label className="legal-check">
+                      <input
+                        type="checkbox"
+                        checked={checkoutTermsAccepted}
+                        onChange={(event) => setCheckoutTermsAccepted(event.target.checked)}
+                      />
+                      <span>
+                        Akceptuję aktualny <a href="/legal" target="_blank" rel="noreferrer">Regulamin, licencję i Politykę prywatności</a> dla tego zakupu.
+                      </span>
+                    </label>
+
+                    <label className="legal-check">
+                      <input
+                        type="checkbox"
+                        checked={checkoutImmediateConsent}
+                        onChange={(event) => setCheckoutImmediateConsent(event.target.checked)}
+                      />
+                      <span>
+                        Żądam rozpoczęcia dostarczania treści cyfrowej / dostępu niezwłocznie po potwierdzeniu płatności.
+                      </span>
+                    </label>
+
+                    <label className="legal-check">
+                      <input
+                        type="checkbox"
+                        checked={checkoutWithdrawalAcknowledged}
+                        onChange={(event) => setCheckoutWithdrawalAcknowledged(event.target.checked)}
+                      />
+                      <span>
+                        Przyjmuję do wiadomości zasady prawa odstąpienia dotyczące treści cyfrowej opisane w aktualnym Regulaminie.
+                      </span>
+                    </label>
+                  </div>
+                </>
+              )}
+
+              {checkoutMessage && (
+                <p className={
+                  checkoutOrder?.status === 'PAID'
+                    ? 'verified'
+                    : 'muted-box'
+                }>
+                  {checkoutMessage}
+                </p>
+              )}
+            </section>
+          )}
         </>}
 
         {error && <p className="error">{error}</p>}

@@ -15,7 +15,7 @@ from .scanner import (
 from .teryt import sync_teryt_from_urls
 
 WARSAW = ZoneInfo("Europe/Warsaw")
-app = FastAPI(title="DotacjaPRO Update Engine")
+app = FastAPI(title="doradcyPRO Update Engine")
 scheduler = AsyncIOScheduler(timezone=WARSAW)
 
 

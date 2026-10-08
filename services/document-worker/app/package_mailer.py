@@ -56,7 +56,7 @@ def _send_brevo(
 ) -> bool:
     api_key = os.getenv("BREVO_API_KEY")
     sender_email = os.getenv("BREVO_FROM_EMAIL")
-    sender_name = os.getenv("BREVO_FROM_NAME", "DotacjaPRO")
+    sender_name = os.getenv("BREVO_FROM_NAME", "doradcyPRO")
 
     if not api_key or not sender_email:
         return False
@@ -153,10 +153,10 @@ def send_package_email(
     institution_name: str,
     message_id: str,
 ) -> None:
-    subject = f"DotacjaPRO — komplet dokumentów: {funding_call_title}"
+    subject = f"doradcyPRO — komplet dokumentów: {funding_call_title}"
 
     text = [
-        "Twój komplet dokumentów DotacjaPRO jest gotowy.",
+        "Twój komplet dokumentów doradcyPRO jest gotowy.",
         "",
         f"Nabór: {funding_call_title}",
         f"Instytucja: {institution_name}",
@@ -182,7 +182,7 @@ def send_package_email(
         "Przed złożeniem wydrukuj dokumenty, jeżeli urząd wymaga wersji papierowej,",
         "sprawdź podpisy i zastosuj instrukcję znajdującą się w pakiecie.",
         "",
-        "DotacjaPRO nie gwarantuje przyznania dofinansowania; decyzję podejmuje właściwa instytucja.",
+        "doradcyPRO nie gwarantuje przyznania dofinansowania; decyzję podejmuje właściwa instytucja.",
     ])
     body = "\n".join(text)
 

@@ -254,7 +254,7 @@ async function queueAdminSaleAlert(
         }
       },
       update: {
-        title: 'DotacjaPRO — sprzedaż',
+        title: 'doradcyPRO — sprzedaż',
         body: [
           `Transakcja: ${formatPln(amountReceivedGrosz)} zł`,
           `Przychód należny Q${quarter} ${year}: ${summary.quarter.dueRevenuePln} zł / ${limitText} zł`,
@@ -269,7 +269,7 @@ async function queueAdminSaleAlert(
         userId: user.id,
         category: 'ACCOUNTING_SALE',
         priority: summary.quarter.thresholdExceeded ? 'P0' : 'P2',
-        title: 'DotacjaPRO — sprzedaż',
+        title: 'doradcyPRO — sprzedaż',
         body: [
           `Transakcja: ${formatPln(amountReceivedGrosz)} zł`,
           `Przychód należny Q${quarter} ${year}: ${summary.quarter.dueRevenuePln} zł / ${limitText} zł`,

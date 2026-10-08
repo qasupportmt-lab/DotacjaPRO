@@ -1,4 +1,4 @@
-# DotacjaPRO deployment
+# doradcyPRO deployment
 
 Production services are intentionally split:
 

@@ -14,7 +14,7 @@ from .submission_instruction import analyze_submission_instruction
 
 API_BASE_URL = os.getenv("API_BASE_URL", "http://localhost:4000")
 WORKER_SECRET = os.getenv("INTERNAL_WORKER_SECRET", "")
-USER_AGENT = "DotacjaPRO-UpdateEngine/0.1 (+official-source-monitor)"
+USER_AGENT = "doradcyPRO-UpdateEngine/0.1 (+official-source-monitor)"
 
 BINARY_SOURCE_KINDS = {
     "OFFICIAL_FORM",

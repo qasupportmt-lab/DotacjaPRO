@@ -1,16 +1,16 @@
-# DoradcaPRO Social Master — Polska / Instagram + TikTok
+# doradcyPRO Social Master — Polska / Instagram + TikTok
 
 ## Mandat
-Jeden system marketingowy DoradcaPRO dla rynku polskiego.
+Jeden system marketingowy doradcyPRO dla rynku polskiego.
 Kanały:
-- Instagram: 1 konto marki DoradcaPRO PL
-- TikTok: 1 konto marki DoradcaPRO PL
+- Instagram: 1 konto marki doradcyPRO PL
+- TikTok: 1 konto marki doradcyPRO PL
 
 Nie tworzymy duplikatów kont tej samej marki bez odrębnej funkcji biznesowej.
 
 ## Cel nadrzędny
 Maksymalizować liczbę kwalifikowanych użytkowników z Polski, którzy:
-1. trafiają do DoradcaPRO,
+1. trafiają do doradcyPRO,
 2. zakładają konto,
 3. rozpoczynają kwalifikację,
 4. kończą ścieżkę dopasowania finansowania,
@@ -64,7 +64,7 @@ Monitoruje:
 - popularność regionalną i branżową.
 
 ### 1.4 Funding Opportunity Worker
-Łączy marketing z rdzeniem DoradcaPRO.
+Łączy marketing z rdzeniem doradcyPRO.
 Nowy zweryfikowany nabór / zmiana programu / termin:
 -> candidate content event
 -> weryfikacja
@@ -115,7 +115,7 @@ Każdy materiał dotyczący:
 - kwot,
 - terminów,
 - dokumentów
-musi mieć aktualne źródło DoradcaPRO.
+musi mieć aktualne źródło doradcyPRO.
 
 ## 3.3 Script Writer
 Tworzy skrypt bazowy.
@@ -158,7 +158,7 @@ Czy materiał:
 - ma właściwy disclaimer, gdy potrzebny?
 
 ## Gate C — Brand QA
-Czy jest zgodny z DoradcaPRO?
+Czy jest zgodny z doradcyPRO?
 
 ## Gate D — Platform QA
 Czy format jest prawidłowy dla IG/TikTok?
@@ -213,7 +213,7 @@ Klasy:
 Automatyczne odpowiedzi tylko dla bezpiecznych klas.
 
 ## Lead Router
-Intencja -> właściwy link DoradcaPRO + UTM.
+Intencja -> właściwy link doradcyPRO + UTM.
 
 ## Escalation Worker
 Ryzykowne / niejednoznaczne przypadki:

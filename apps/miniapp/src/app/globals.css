@@ -177,3 +177,209 @@ button:disabled { opacity: .45; cursor: default; }
     align-items: center;
   }
 }
+
+
+/* doradcyPRO authenticated product gateway */
+.hidden-card { display: none; }
+.product-gateway {
+  position: relative;
+  min-height: 600px;
+  overflow: hidden;
+  border: 1px solid rgba(255,255,255,.08);
+  border-radius: 28px;
+  padding: clamp(24px, 5vw, 52px);
+  background:
+    radial-gradient(circle at 14% 0%, rgba(126,242,167,.13), transparent 34%),
+    radial-gradient(circle at 92% 22%, rgba(82,128,255,.13), transparent 32%),
+    linear-gradient(145deg, rgba(14,24,20,.99), rgba(7,14,12,.99));
+  box-shadow: 0 26px 80px rgba(0,0,0,.28);
+}
+.gateway-copy { position: relative; z-index: 3; max-width: 610px; }
+.gateway-copy h2 {
+  margin: 10px 0 12px;
+  font-size: clamp(38px, 8vw, 66px);
+  line-height: .98;
+  letter-spacing: -.05em;
+}
+.gateway-copy p { max-width: 560px; margin: 0; }
+.gateway-grid {
+  position: relative;
+  z-index: 4;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0,1fr));
+  gap: 12px;
+  max-width: 720px;
+  margin-top: 48px;
+}
+.gateway-product {
+  min-height: 110px;
+  margin-top: 0;
+  padding: 16px;
+  text-align: left;
+  border: 1px solid rgba(255,255,255,.09);
+  background: rgba(255,255,255,.035);
+  color: var(--text);
+}
+.gateway-product:not(:disabled):hover,
+.gateway-product:not(:disabled):focus-visible {
+  border-color: rgba(126,242,167,.65);
+  background: rgba(126,242,167,.075);
+}
+.gateway-product-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 8px;
+}
+.gateway-product-head strong { font-size: 16px; }
+.gateway-product-head small {
+  color: var(--accent);
+  font-size: 10px;
+  font-weight: 850;
+  text-transform: uppercase;
+  letter-spacing: .06em;
+}
+.guide-hero {
+  position: absolute;
+  right: clamp(12px, 7vw, 78px);
+  top: 26px;
+  width: 220px;
+  height: 275px;
+  pointer-events: none;
+  opacity: .96;
+}
+.guide-head {
+  position: absolute;
+  left: 70px;
+  top: 20px;
+  width: 82px;
+  height: 96px;
+  border-radius: 46% 52% 48% 50%;
+  background: linear-gradient(145deg, #d4a77f, #a87153);
+}
+.guide-hair {
+  position: absolute;
+  left: -7px;
+  top: -16px;
+  width: 102px;
+  height: 53px;
+  border-radius: 62% 78% 24% 35%;
+  transform: rotate(-8deg);
+  background: #171714;
+}
+.guide-mustache {
+  position: absolute;
+  left: 24px;
+  top: 61px;
+  width: 37px;
+  height: 9px;
+  border-radius: 50%;
+  background: #2a211d;
+}
+.guide-suit {
+  position: absolute;
+  left: 38px;
+  top: 111px;
+  width: 148px;
+  height: 160px;
+  clip-path: polygon(15% 0, 85% 0, 100% 100%, 0 100%);
+  border-radius: 26px 26px 12px 12px;
+  background: linear-gradient(135deg, #242c33, #0d1116);
+}
+.guide-shirt {
+  position: absolute;
+  left: 55px;
+  top: 0;
+  width: 38px;
+  height: 96px;
+  background: #f1f0e9;
+  clip-path: polygon(0 0, 100% 0, 74% 100%, 26% 100%);
+}
+.guide-tie {
+  position: absolute;
+  left: 68px;
+  top: 20px;
+  width: 13px;
+  height: 70px;
+  background: var(--accent);
+  clip-path: polygon(50% 0, 100% 18%, 70% 100%, 30% 100%, 0 18%);
+}
+.guide-arm {
+  position: absolute;
+  left: -34px;
+  top: 29px;
+  width: 105px;
+  height: 34px;
+  border-radius: 999px;
+  transform: rotate(-23deg);
+  background: linear-gradient(90deg, #1a2228 0 68%, #bd8b68 68%);
+}
+@media (max-width: 760px) {
+  .product-gateway { min-height: 760px; padding-top: 224px; }
+  .guide-hero { right: 50%; transform: translateX(50%); top: 14px; width: 188px; height: 235px; }
+  .gateway-grid { grid-template-columns: 1fr; margin-top: 28px; }
+  .gateway-copy h2 { font-size: 42px; }
+}
+
+
+/* doradcyPRO commerce / Stripe checkout */
+.commerce-panel {
+  margin-top: 28px;
+  padding: 22px;
+  border: 1px solid rgba(126,242,167,.22);
+  border-radius: 22px;
+  background: linear-gradient(145deg, rgba(126,242,167,.05), rgba(255,255,255,.025));
+}
+.commerce-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 18px;
+}
+.commerce-head h2 { margin: 6px 0 0; }
+.commerce-products {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0,1fr));
+  gap: 12px;
+}
+.commerce-product {
+  display: grid;
+  gap: 14px;
+  align-content: start;
+  padding: 16px;
+  border: 1px solid rgba(255,255,255,.08);
+  border-radius: 16px;
+  background: rgba(255,255,255,.035);
+}
+.commerce-product p {
+  margin: 7px 0 0;
+  font-size: 13px;
+  line-height: 1.45;
+}
+.commerce-price {
+  color: var(--accent);
+  font-size: 22px;
+  font-weight: 900;
+  letter-spacing: -.03em;
+}
+.checkout-consents {
+  display: grid;
+  gap: 10px;
+  margin-top: 18px;
+  padding: 15px;
+  border-radius: 15px;
+  background: rgba(255,255,255,.025);
+}
+.commerce-order-state {
+  margin-bottom: 16px;
+  padding: 14px;
+  border: 1px solid rgba(126,242,167,.18);
+  border-radius: 14px;
+  background: rgba(126,242,167,.055);
+}
+@media (max-width: 760px) {
+  .commerce-head { display: grid; }
+  .commerce-products { grid-template-columns: 1fr; }
+}

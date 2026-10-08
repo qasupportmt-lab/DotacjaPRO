@@ -84,6 +84,8 @@ def test_build_package_contains_documents_instruction_and_manifest(monkeypatch):
         assert "00_INSTRUKCJA_ZLOZENIA.txt" in names
         assert "00_WARUNKI_LICENCJA_RODO.html" in names
         assert "00_WARUNKI_LICENCJA_RODO.txt" in names
+        assert "00_doradcyPRO_RAPORT.pdf" in names
+        assert archive.read("00_doradcyPRO_RAPORT.pdf").startswith(b"%PDF")
         assert "99_MANIFEST.json" in names
 
         instruction = archive.read("00_INSTRUKCJA_ZLOZENIA.txt").decode("utf-8")
@@ -100,6 +102,8 @@ def test_build_package_contains_documents_instruction_and_manifest(monkeypatch):
         assert "00_WARUNKI_LICENCJA_RODO.txt" in manifest["legal"]["files"]
         assert len(manifest["documents"]) == 2
         assert manifest["documents"][0]["sha256"] == hashlib.sha256(b"FORM A").hexdigest()
+        assert manifest["ebook"]["name"] == "00_doradcyPRO_RAPORT.pdf"
+        assert len(manifest["ebook"]["sha256"]) == 64
 
 
 def test_build_package_rejects_rendered_document_hash_mismatch(monkeypatch):

@@ -1,6 +1,7 @@
 import Fastify, { type FastifyRequest } from 'fastify';
 import crypto from 'node:crypto';
 import cors from '@fastify/cors';
+import fastifyRawBody from 'fastify-raw-body';
 import { z } from 'zod';
 import { prisma } from '@dotacjapro/db';
 import {
@@ -28,6 +29,7 @@ import { getLegalOperatorState } from './legal/operator.js';
 import { registerAccountingRoutes } from './accounting/routes.js';
 import { registerCommerceRoutes } from './commerce/routes.js';
 import { registerSupervisorRoutes } from './supervisor/routes.js';
+import { registerPlatformRoutes } from './platform/routes.js';
 
 const app = Fastify({ logger: true, bodyLimit: 35 * 1024 * 1024 });
 
@@ -37,6 +39,13 @@ await app.register(cors, {
   methods: ['GET', 'HEAD', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
   allowedHeaders: ['Authorization', 'Content-Type'],
   maxAge: 86400
+});
+
+await app.register(fastifyRawBody, {
+  field: 'rawBody',
+  global: false,
+  encoding: false,
+  runFirst: true
 });
 
 app.addContentTypeParser(
@@ -241,7 +250,7 @@ app.get('/v1/storage/download', async (request, reply) => {
     return reply.code(404).send({ error: 'STORAGE_OBJECT_NOT_FOUND' });
   }
 
-  const fileName = payload.storageKey.split('/').pop() || 'DoradcaPRO-document';
+  const fileName = payload.storageKey.split('/').pop() || 'doradcyPRO-document';
   reply
     .header('content-type', object.mimeType)
     .header(
@@ -5154,7 +5163,7 @@ app.post('/v1/internal/build-digests', async (request) => {
     await prisma.notification.upsert({
       where: { userId_dedupeKey: { userId: user.id, dedupeKey } },
       update: {
-        title: 'DoradcaPRO — poranny skrót',
+        title: 'doradcyPRO — poranny skrót',
         body: lines.map((line) => `• ${line}`).join('\n'),
         scheduledAt: now,
         failedAt: null,
@@ -5164,7 +5173,7 @@ app.post('/v1/internal/build-digests', async (request) => {
         userId: user.id,
         category: 'MORNING_DIGEST',
         priority: 'P5',
-        title: 'DoradcaPRO — poranny skrót',
+        title: 'doradcyPRO — poranny skrót',
         body: lines.map((line) => `• ${line}`).join('\n'),
         scheduledAt: now,
         dedupeKey
@@ -5247,6 +5256,8 @@ await registerCommerceRoutes(app, {
 });
 
 await registerSupervisorRoutes(app, { requireWorkerSecret });
+
+await registerPlatformRoutes(app, { requireUserId });
 
 app.setErrorHandler((error, request, reply) => {
   const statusCode = (error as Error & { statusCode?: number }).statusCode ?? 500;
