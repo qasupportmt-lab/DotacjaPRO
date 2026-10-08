@@ -1,4 +1,4 @@
-# Architektura DotacjaPRO
+# Architektura doradcyPRO
 
 ## Warstwy
 
