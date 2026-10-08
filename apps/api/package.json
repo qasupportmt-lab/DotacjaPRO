@@ -7,7 +7,7 @@
     "build": "tsc -p tsconfig.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "lint": "echo 'lint api'",
-    "test": "tsx src/accounting/calculator.test.ts"
+    "test": "tsx --test src/accounting/calculator.test.ts src/commerce/access-keys.test.ts"
   },
   "dependencies": {
     "@dotacjapro/db": "workspace:*",
